@@ -1,15 +1,22 @@
+import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 
+import google.generativeai as genai
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select, case, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.dependencies import get_current_user, get_db
 from app.models.postgres.api_usage import APIUsage
 from app.models.postgres.navigation_log import NavigationLog
 from app.models.postgres.sos_event import SOSEvent
 from app.models.postgres.transcript import SignSession, TranscriptEntry
 from app.models.postgres.user import User
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -345,4 +352,167 @@ async def sos_history(
             }
             for e in sos_rows
         ],
+    }
+
+
+INSIGHTS_PROMPT = """You are an AI analytics assistant for ARIA, an accessibility app that helps deaf/mute people (SIGN mode) and blind people (GUIDE mode).
+
+Analyze this user's usage data and generate a helpful, encouraging dashboard summary. Be concise and insightful.
+
+User data:
+{data}
+
+Generate a JSON response with EXACTLY this structure (no markdown, no code fences, just raw JSON):
+{{
+  "greeting": "A short personalized greeting mentioning the user's name",
+  "summary": "A 2-3 sentence overview of their overall usage patterns",
+  "sign_insight": "One specific insight about their SIGN mode usage (emotions, languages, frequency). If no data, say they haven't tried it yet and encourage them.",
+  "guide_insight": "One specific insight about their GUIDE mode usage. If no data, say they haven't tried it yet and encourage them.",
+  "tip": "One actionable tip based on their usage patterns to get more out of ARIA",
+  "streak_text": "A motivational line about their activity (e.g., 'You've translated X sentences this week!' or 'Keep going!')"
+}}"""
+
+
+@router.get("/insights")
+async def dashboard_insights(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """AI-generated dashboard insights using Gemini, loaded on-demand."""
+    uid = user.id
+
+    # ── Gather raw stats (reuse logic from other endpoints) ──
+
+    # Sign stats
+    sign_sessions = await db.scalar(
+        select(func.count()).select_from(SignSession).where(SignSession.user_id == uid)
+    ) or 0
+    transcript_entries = await db.scalar(
+        select(func.count())
+        .select_from(TranscriptEntry)
+        .join(SignSession, TranscriptEntry.session_id == SignSession.id)
+        .where(SignSession.user_id == uid)
+    ) or 0
+
+    # Emotion distribution
+    emotion_rows = (
+        await db.execute(
+            select(TranscriptEntry.emotion, func.count().label("count"))
+            .join(SignSession, TranscriptEntry.session_id == SignSession.id)
+            .where(SignSession.user_id == uid)
+            .group_by(TranscriptEntry.emotion)
+            .order_by(func.count().desc())
+        )
+    ).all()
+    emotion_dist = {row.emotion: row.count for row in emotion_rows}
+
+    # Language usage
+    lang_rows = (
+        await db.execute(
+            select(TranscriptEntry.language, func.count().label("count"))
+            .join(SignSession, TranscriptEntry.session_id == SignSession.id)
+            .where(SignSession.user_id == uid)
+            .group_by(TranscriptEntry.language)
+            .order_by(func.count().desc())
+        )
+    ).all()
+    lang_usage = {row.language: row.count for row in lang_rows}
+
+    # Navigation stats
+    nav_total = await db.scalar(
+        select(func.count()).select_from(NavigationLog).where(NavigationLog.user_id == uid)
+    ) or 0
+    nav_completed = await db.scalar(
+        select(func.count())
+        .select_from(NavigationLog)
+        .where(NavigationLog.user_id == uid, NavigationLog.ended_at.isnot(None))
+    ) or 0
+
+    # Obstacle scans
+    obstacle_total = await db.scalar(
+        select(func.count())
+        .select_from(APIUsage)
+        .where(APIUsage.endpoint == "detect_obstacle")
+    ) or 0
+
+    # SOS events
+    sos_count = await db.scalar(
+        select(func.count()).select_from(SOSEvent).where(SOSEvent.user_id == uid)
+    ) or 0
+
+    # Recent sentences (last 5)
+    recent_rows = (
+        await db.execute(
+            select(TranscriptEntry.text, TranscriptEntry.emotion)
+            .join(SignSession, TranscriptEntry.session_id == SignSession.id)
+            .where(SignSession.user_id == uid)
+            .order_by(TranscriptEntry.created_at.desc())
+            .limit(5)
+        )
+    ).all()
+    recent = [{"text": r.text, "emotion": r.emotion} for r in recent_rows]
+
+    # Average session duration
+    session_rows = (
+        await db.execute(
+            select(SignSession.started_at, SignSession.ended_at)
+            .where(SignSession.user_id == uid, SignSession.ended_at.isnot(None))
+        )
+    ).all()
+    avg_dur = 0.0
+    if session_rows:
+        durations = [(r.ended_at - r.started_at).total_seconds() for r in session_rows]
+        avg_dur = round(sum(durations) / len(durations), 1)
+
+    # ── Build stats payload ──
+    stats = {
+        "user_name": user.name,
+        "sign_mode": {
+            "total_sessions": sign_sessions,
+            "total_sentences": transcript_entries,
+            "emotion_distribution": emotion_dist,
+            "language_usage": lang_usage,
+            "avg_session_duration_seconds": avg_dur,
+            "recent_sentences": recent,
+        },
+        "guide_mode": {
+            "total_navigations": nav_total,
+            "completed_navigations": nav_completed,
+            "total_obstacle_scans": obstacle_total,
+        },
+        "sos_events": sos_count,
+    }
+
+    # ── Call Gemini for insights ──
+    ai_insights = None
+    try:
+        if settings.gemini_api_key:
+            genai.configure(api_key=settings.gemini_api_key)
+            model = genai.GenerativeModel(
+                "gemini-2.0-flash",
+                generation_config=genai.GenerationConfig(
+                    max_output_tokens=500,
+                    temperature=0.7,
+                ),
+            )
+            prompt = INSIGHTS_PROMPT.format(data=json.dumps(stats, indent=2))
+            response = await asyncio.to_thread(
+                lambda: model.generate_content(prompt).text
+            )
+            # Strip markdown fences if present
+            cleaned = response.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
+            if cleaned.endswith("```"):
+                cleaned = cleaned.rsplit("```", 1)[0]
+            cleaned = cleaned.strip()
+            ai_insights = json.loads(cleaned)
+        else:
+            logger.warning("gemini_api_key_not_set", msg="Skipping AI insights")
+    except Exception as e:
+        logger.error("gemini_insights_error", error=str(e))
+
+    return {
+        "stats": stats,
+        "insights": ai_insights,
     }
