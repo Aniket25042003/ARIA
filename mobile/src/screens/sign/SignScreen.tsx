@@ -22,6 +22,7 @@ const FRAME_INTERVAL_MS = 200; // 5 fps — higher rate for better stability det
 
 export default function SignScreen() {
   const [permission, requestPermission] = useCameraPermissions();
+  const [facing, setFacing] = useState<"front" | "back">("front");
   const cameraRef = useRef<CameraView>(null);
   const frameIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -83,6 +84,10 @@ export default function SignScreen() {
     disconnect();
   }, [disconnect]);
 
+  const toggleCamera = useCallback(() => {
+    setFacing((prev) => (prev === "front" ? "back" : "front"));
+  }, []);
+
   const handleSOS = useCallback(async () => {
     setSosActive(true);
     try {
@@ -132,19 +137,30 @@ export default function SignScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Camera preview (small, top) */}
+      {/* Camera preview */}
       {isListening && (
         <View style={styles.cameraContainer}>
           <CameraView
             ref={cameraRef}
             style={styles.camera}
-            facing="front"
+            facing={facing}
           />
           {currentBuffer ? (
             <View style={styles.bufferOverlay}>
               <Text style={styles.bufferText}>{currentBuffer}</Text>
             </View>
           ) : null}
+          {/* Camera flip button */}
+          <TouchableOpacity
+            style={styles.flipBtn}
+            onPress={toggleCamera}
+            accessibilityLabel={`Switch to ${facing === "front" ? "back" : "front"} camera`}
+            accessibilityRole="button"
+          >
+            <Text style={styles.flipBtnText}>
+              {facing === "front" ? "BACK" : "FRONT"}
+            </Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -220,7 +236,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xl,
   },
   cameraContainer: {
-    height: 150,
+    height: 200,
     borderRadius: borderRadius.md,
     overflow: "hidden",
     marginBottom: spacing.md,
@@ -243,6 +259,23 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     textAlign: "center",
     letterSpacing: 2,
+  },
+  flipBtn: {
+    position: "absolute",
+    top: spacing.sm,
+    right: spacing.sm,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    borderRadius: borderRadius.round,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 2,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.3)",
+  },
+  flipBtnText: {
+    color: colors.text,
+    fontSize: fontSize.xs,
+    fontWeight: "700",
+    letterSpacing: 1,
   },
   controls: {
     flexDirection: "row",
