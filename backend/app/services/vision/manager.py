@@ -4,7 +4,7 @@ import time
 from app.config import settings
 from app.db.postgres import async_session_factory
 from app.models.postgres.api_usage import APIUsage
-from app.services.vision.base import VisionProvider, VisionResult
+from app.services.vision.base import SignRecognitionResult, VisionProvider, VisionResult
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -67,6 +67,9 @@ class VisionManager:
                 await self._log_usage("local", "detect_obstacle", int(latency), True)
                 return result
         raise VisionProviderUnavailableError("Local vision provider not available")
+
+    async def recognize_sign(self, image_b64: str) -> SignRecognitionResult:
+        return await self._call_with_fallback("recognize_sign", image_b64)
 
     async def build_sentence(self, partial_text: str, emotion: str) -> VisionResult:
         return await self._call_with_fallback("build_sentence", partial_text, emotion)

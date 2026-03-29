@@ -5,7 +5,7 @@ import time
 import google.generativeai as genai
 
 from app.config import settings
-from app.services.vision.base import VisionProvider, VisionResult
+from app.services.vision.base import SignRecognitionResult, VisionProvider, VisionResult
 
 OBSTACLE_PROMPT = (
     "Navigation assistant for blind person. "
@@ -15,12 +15,25 @@ OBSTACLE_PROMPT = (
     "SEVERITY is: clear, caution, or danger."
 )
 
+SIGN_RECOGNITION_PROMPT = (
+    "You are an expert ASL (American Sign Language) interpreter.\n"
+    "Look at this image carefully.\n\n"
+    "1. SIGN: What ASL sign or fingerspelled letter is the person making?\n"
+    "   - If fingerspelling a letter, return just the uppercase letter (A-Z)\n"
+    "   - If making a word sign, return the English word in uppercase (e.g., HELLO, THANK YOU, YES, NO)\n"
+    "   - If no clear sign or no hand visible, return NONE\n\n"
+    "2. EMOTION: What facial emotion is the person showing?\n"
+    "   Choose from: happy, sad, angry, fear, surprise, disgust, neutral\n\n"
+    "Format your response EXACTLY as: SIGN|EMOTION\n"
+    "Examples: A|neutral, HELLO|happy, THANK YOU|sad, B|neutral, NONE|neutral\n"
+    "Return ONLY the SIGN|EMOTION format, nothing else."
+)
+
 SENTENCE_PROMPT_TEMPLATE = (
-    "A deaf person finger-spelled these ASL letters: '{letters}'. "
-    "The letters may contain recognition errors — similar-looking signs are often confused "
-    "(e.g., M/N/S/T/A/E in fist shapes, U/V/R/K with two fingers, D/G/L with one finger). "
+    "A deaf person communicated these ASL signs/letters in sequence: '{letters}'. "
+    "These may be a mix of fingerspelled letters and ASL word-signs. "
     "Emotion: {emotion}. "
-    "Interpret the intended word(s), correct likely errors, and form ONE natural English sentence. "
+    "Interpret the intended meaning, correct likely errors, and form ONE natural English sentence. "
     "Return ONLY the sentence, nothing else."
 )
 
@@ -49,8 +62,13 @@ class GeminiProvider(VisionProvider):
                 temperature=0.2,
             ),
         )
-        # Set request timeout for all models
-        self._request_options = {"timeout": 5}
+        self._sign_model = genai.GenerativeModel(
+            "gemini-2.0-flash",
+            generation_config=genai.GenerationConfig(
+                max_output_tokens=20,
+                temperature=0.1,
+            ),
+        )
 
     async def detect_obstacle(self, image_b64: str) -> VisionResult:
         start = time.monotonic()
@@ -65,6 +83,25 @@ class GeminiProvider(VisionProvider):
         severity, text = self._parse_obstacle_response(raw)
         return VisionResult(
             text=text, provider=self.name, latency_ms=latency, severity=severity
+        )
+
+    async def recognize_sign(self, image_b64: str) -> SignRecognitionResult:
+        start = time.monotonic()
+        image_data = base64.b64decode(image_b64)
+        response = await asyncio.to_thread(
+            self._sign_model.generate_content,
+            [SIGN_RECOGNITION_PROMPT, {"mime_type": "image/jpeg", "data": image_data}],
+        )
+        latency = (time.monotonic() - start) * 1000
+        raw = response.text.strip()
+
+        sign, emotion = self._parse_sign_response(raw)
+        return SignRecognitionResult(
+            sign=sign,
+            emotion=emotion,
+            provider=self.name,
+            latency_ms=latency,
+            confidence=0.85 if sign != "NONE" else 0.0,
         )
 
     async def build_sentence(self, partial_text: str, emotion: str) -> VisionResult:
@@ -93,6 +130,20 @@ class GeminiProvider(VisionProvider):
             return bool(response.text)
         except Exception:
             return False
+
+    @staticmethod
+    def _parse_sign_response(raw: str) -> tuple[str, str]:
+        """Parse 'SIGN|EMOTION' format. Returns (sign, emotion)."""
+        if "|" in raw:
+            parts = raw.split("|", 1)
+            sign = parts[0].strip().upper()
+            emotion = parts[1].strip().lower()
+            valid_emotions = {"happy", "sad", "angry", "fear", "surprise", "disgust", "neutral"}
+            if emotion not in valid_emotions:
+                emotion = "neutral"
+            return sign, emotion
+        # Fallback: treat entire response as sign
+        return raw.strip().upper() or "NONE", "neutral"
 
     @staticmethod
     def _parse_obstacle_response(raw: str) -> tuple[str, str]:
