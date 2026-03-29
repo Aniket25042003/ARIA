@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import os
 
@@ -57,6 +58,15 @@ async def speak(text: str, emotion: str = "neutral") -> str:
     voice_id = VOICE_MAP.get(emotion, VOICE_MAP["neutral"])
     output_path = generate_audio_path(f"aria_{emotion}")
 
+    # Run synchronous ElevenLabs SDK in thread pool to avoid blocking event loop
+    filename = await asyncio.to_thread(_generate_tts, text, voice_id, output_path)
+    _tts_cache[key] = filename
+    logger.info("tts_generated", emotion=emotion, file=filename, text_length=len(text))
+    return filename
+
+
+def _generate_tts(text: str, voice_id: str, output_path: str) -> str:
+    """Synchronous TTS generation — called from thread pool."""
     client = _get_client()
     audio_generator = client.text_to_speech.convert(
         text=text,
@@ -68,7 +78,4 @@ async def speak(text: str, emotion: str = "neutral") -> str:
         for chunk in audio_generator:
             f.write(chunk)
 
-    filename = output_path.split("/")[-1]
-    _tts_cache[key] = filename
-    logger.info("tts_generated", emotion=emotion, file=filename, text_length=len(text))
-    return filename
+    return output_path.split("/")[-1]

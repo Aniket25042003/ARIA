@@ -31,7 +31,6 @@ class GeminiProvider(VisionProvider):
 
     def __init__(self):
         genai.configure(api_key=settings.gemini_api_key)
-        # Use Flash-Lite for speed; fall back to Flash if unavailable
         self._model = genai.GenerativeModel("gemini-2.0-flash")
         self._text_model = genai.GenerativeModel(
             "gemini-2.0-flash",
@@ -47,6 +46,8 @@ class GeminiProvider(VisionProvider):
                 temperature=0.2,
             ),
         )
+        # Set request timeout for all models
+        self._request_options = {"timeout": 5}
 
     async def detect_obstacle(self, image_b64: str) -> VisionResult:
         start = time.monotonic()

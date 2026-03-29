@@ -58,7 +58,9 @@ class VisionManager:
         logger.info("vision_manager_ready", providers=[p.name for p in self._providers])
 
     async def detect_obstacle(self, image_b64: str) -> VisionResult:
-        return await self._call_with_fallback("detect_obstacle", image_b64)
+        # For obstacle detection, prefer local YOLO (fast, no network dependency)
+        # then fall back to cloud providers if local fails
+        return await self._call_with_fallback("detect_obstacle", image_b64, prefer_local=True)
 
     async def build_sentence(self, partial_text: str, emotion: str) -> VisionResult:
         return await self._call_with_fallback("build_sentence", partial_text, emotion)
@@ -66,19 +68,30 @@ class VisionManager:
     async def translate(self, text: str, target_lang: str) -> VisionResult:
         return await self._call_with_fallback("translate", text, target_lang)
 
-    async def _call_with_fallback(self, method: str, *args) -> VisionResult:
+    async def _call_with_fallback(self, method: str, *args, prefer_local: bool = False) -> VisionResult:
         if not self._initialized or not self._providers:
             raise VisionProviderUnavailableError("No vision providers available")
 
         last_error = None
 
-        for provider in self._providers:
+        providers = self._providers
+        if prefer_local:
+            # Put local provider first for latency-sensitive operations
+            local = [p for p in self._providers if p.name == "local"]
+            cloud = [p for p in self._providers if p.name != "local"]
+            providers = local + cloud
+
+        for provider in providers:
             if not self._health_cache.get(provider.name, True):
                 continue
 
             start = time.monotonic()
             try:
-                result = await getattr(provider, method)(*args)
+                # 5-second timeout per provider — fail fast, fall through quickly
+                result = await asyncio.wait_for(
+                    getattr(provider, method)(*args),
+                    timeout=5.0,
+                )
                 latency = (time.monotonic() - start) * 1000
                 self._fail_counts[provider.name] = 0
                 await self._log_usage(provider.name, method, int(latency), True)
@@ -86,13 +99,26 @@ class VisionManager:
             except NotImplementedError:
                 # This provider doesn't support this method, skip silently
                 continue
+            except asyncio.TimeoutError:
+                latency = (time.monotonic() - start) * 1000
+                await self._log_usage(provider.name, method, int(latency), False, "timeout")
+                # Timeout counts as immediate unhealthy — provider is too slow
+                self._health_cache[provider.name] = False
+                self._fail_counts[provider.name] = 3
+                last_error = TimeoutError(f"{provider.name} timed out after 5s")
+                logger.warning(
+                    "vision_provider_timeout",
+                    provider=provider.name,
+                    method=method,
+                    latency_ms=int(latency),
+                )
+                continue
             except Exception as e:
                 latency = (time.monotonic() - start) * 1000
                 await self._log_usage(provider.name, method, int(latency), False, str(e))
-                # Only mark unhealthy after 3 consecutive failures
+                # Mark unhealthy immediately on error — don't waste time retrying broken providers
+                self._health_cache[provider.name] = False
                 self._fail_counts[provider.name] = self._fail_counts.get(provider.name, 0) + 1
-                if self._fail_counts[provider.name] >= 3:
-                    self._health_cache[provider.name] = False
                 last_error = e
                 logger.warning(
                     "vision_provider_failed",
