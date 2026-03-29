@@ -372,18 +372,212 @@ Generate a JSON response with EXACTLY this structure (no markdown, no code fence
   "streak_text": "A motivational line about their activity (e.g., 'You've translated X sentences this week!' or 'Keep going!')"
 }}"""
 
+# Models to try in order of preference (different SDK versions support different names)
+GEMINI_MODEL_CANDIDATES = [
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-pro",
+    "gemini-pro",
+]
+
+
+def _generate_local_insights(stats: dict) -> dict:
+    """Generate contextual insights locally when Gemini is unavailable."""
+    name = stats["user_name"]
+    sign = stats["sign_mode"]
+    guide = stats["guide_mode"]
+    sos = stats["sos_events"]
+
+    sessions = sign["total_sessions"]
+    sentences = sign["total_sentences"]
+    emotions = sign["emotion_distribution"]
+    languages = sign["language_usage"]
+    avg_dur = sign["avg_session_duration_seconds"]
+    navs = guide["total_navigations"]
+    scans = guide["total_obstacle_scans"]
+
+    # Greeting
+    greeting = f"Hi {name}! Here's your ARIA activity overview."
+
+    # Summary
+    total_actions = sessions + sentences + navs + scans
+    if total_actions == 0:
+        summary = (
+            "You're just getting started with ARIA! "
+            "Try out SIGN mode to translate your hand signs into speech, "
+            "or GUIDE mode to detect obstacles with your camera."
+        )
+    else:
+        parts = []
+        if sessions > 0:
+            parts.append(f"{sessions} sign session{'s' if sessions != 1 else ''}")
+        if sentences > 0:
+            parts.append(f"{sentences} translated sentence{'s' if sentences != 1 else ''}")
+        if scans > 0:
+            parts.append(f"{scans} obstacle scan{'s' if scans != 1 else ''}")
+        summary = f"You've completed {', '.join(parts)}. "
+        if sessions > 0 and navs > 0:
+            summary += "You're actively using both SIGN and GUIDE modes — great versatility!"
+        elif sessions > 0:
+            summary += "You've been focused on SIGN mode. Try GUIDE mode for obstacle detection!"
+        elif navs > 0 or scans > 0:
+            summary += "You've been using GUIDE mode. Give SIGN mode a try for ASL translation!"
+        else:
+            summary += "Keep exploring to get the most out of ARIA."
+
+    # Sign insight
+    if sessions == 0 and sentences == 0:
+        sign_insight = (
+            "You haven't tried SIGN mode yet! "
+            "Open the Sign tab, point your front camera at your hands, "
+            "and start signing in ASL — ARIA will speak your words aloud."
+        )
+    else:
+        sign_parts = []
+        if emotions:
+            top_emotion = max(emotions, key=emotions.get)
+            sign_parts.append(
+                f"your most common emotion is {top_emotion} "
+                f"({emotions[top_emotion]} time{'s' if emotions[top_emotion] != 1 else ''})"
+            )
+        if languages:
+            lang_count = len(languages)
+            if lang_count > 1:
+                sign_parts.append(
+                    f"you've used {lang_count} different languages"
+                )
+            else:
+                lang_name = list(languages.keys())[0]
+                sign_parts.append(f"all in {lang_name.upper()}")
+        if avg_dur > 0:
+            if avg_dur > 60:
+                sign_parts.append(
+                    f"with average sessions of {round(avg_dur / 60, 1)} minutes"
+                )
+            else:
+                sign_parts.append(
+                    f"with average sessions of {round(avg_dur)}s"
+                )
+        sign_insight = (
+            f"Across {sessions} session{'s' if sessions != 1 else ''} "
+            f"and {sentences} sentence{'s' if sentences != 1 else ''}, "
+            + ", ".join(sign_parts) + "."
+            if sign_parts
+            else f"You've had {sessions} session{'s' if sessions != 1 else ''} "
+            f"with {sentences} sentence{'s' if sentences != 1 else ''}. Keep signing!"
+        )
+
+    # Guide insight
+    if navs == 0 and scans == 0:
+        guide_insight = (
+            "You haven't tried GUIDE mode yet! "
+            "Open the Guide tab, point your back camera ahead, "
+            "and ARIA will warn you about obstacles in real-time."
+        )
+    else:
+        parts = []
+        if scans > 0:
+            parts.append(f"{scans} obstacle scan{'s' if scans != 1 else ''} performed")
+        if navs > 0:
+            parts.append(f"{navs} navigation{'s' if navs != 1 else ''} started")
+            completed = guide["completed_navigations"]
+            if completed > 0:
+                parts.append(f"{completed} completed")
+        guide_insight = "GUIDE mode activity: " + ", ".join(parts) + "."
+
+    # Tip
+    if total_actions == 0:
+        tip = "Start with SIGN mode — just point your camera at your hands and sign a letter to see ARIA in action!"
+    elif sessions > 0 and len(languages) <= 1:
+        tip = "Try switching languages in SIGN mode! ARIA supports English, Spanish, French, and Hindi."
+    elif sessions > 0 and scans == 0:
+        tip = "Give GUIDE mode a try! It uses your camera to detect obstacles and keep you safe while walking."
+    elif scans > 0 and sessions == 0:
+        tip = "Try SIGN mode to translate ASL into spoken words. It's great for communicating with people around you."
+    elif sos > 0:
+        tip = "Remember, the SOS button is always available in SIGN mode for emergencies. Stay safe!"
+    else:
+        tip = "Keep using ARIA regularly to build your communication confidence. Every session makes a difference!"
+
+    # Streak
+    if total_actions == 0:
+        streak_text = "Your ARIA journey starts now!"
+    elif sentences >= 50:
+        streak_text = f"Amazing! {sentences} sentences translated — you're a power user!"
+    elif sentences >= 10:
+        streak_text = f"{sentences} sentences and counting — great progress!"
+    elif sessions >= 5:
+        streak_text = f"{sessions} sessions completed — you're building a habit!"
+    elif total_actions >= 10:
+        streak_text = f"{total_actions} total actions — keep the momentum going!"
+    else:
+        streak_text = "You're off to a great start. Keep exploring!"
+
+    return {
+        "greeting": greeting,
+        "summary": summary,
+        "sign_insight": sign_insight,
+        "guide_insight": guide_insight,
+        "tip": tip,
+        "streak_text": streak_text,
+    }
+
+
+async def _try_gemini_insights(stats: dict) -> dict | None:
+    """Attempt to generate insights via Gemini, trying multiple model names."""
+    if not settings.gemini_api_key:
+        logger.info("gemini_key_not_set", msg="Using local insights fallback")
+        return None
+
+    genai.configure(api_key=settings.gemini_api_key)
+    prompt = INSIGHTS_PROMPT.format(data=json.dumps(stats, indent=2))
+
+    for model_name in GEMINI_MODEL_CANDIDATES:
+        try:
+            logger.info("trying_gemini_model", model=model_name)
+            model = genai.GenerativeModel(
+                model_name,
+                generation_config=genai.GenerationConfig(
+                    max_output_tokens=500,
+                    temperature=0.7,
+                ),
+            )
+            response = await asyncio.to_thread(
+                lambda m=model: m.generate_content(prompt).text
+            )
+            # Strip markdown fences if present
+            cleaned = response.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
+            if cleaned.endswith("```"):
+                cleaned = cleaned.rsplit("```", 1)[0]
+            cleaned = cleaned.strip()
+            result = json.loads(cleaned)
+            logger.info("gemini_insights_ok", model=model_name)
+            return result
+        except Exception as e:
+            logger.warning(
+                "gemini_model_failed",
+                model=model_name,
+                error=str(e),
+            )
+            continue
+
+    logger.error("all_gemini_models_failed", msg="Falling back to local insights")
+    return None
+
 
 @router.get("/insights")
 async def dashboard_insights(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """AI-generated dashboard insights using Gemini, loaded on-demand."""
+    """AI-generated dashboard insights using Gemini with local fallback."""
     uid = user.id
 
-    # ── Gather raw stats (reuse logic from other endpoints) ──
+    # ── Gather raw stats ──
 
-    # Sign stats
     sign_sessions = await db.scalar(
         select(func.count()).select_from(SignSession).where(SignSession.user_id == uid)
     ) or 0
@@ -394,7 +588,6 @@ async def dashboard_insights(
         .where(SignSession.user_id == uid)
     ) or 0
 
-    # Emotion distribution
     emotion_rows = (
         await db.execute(
             select(TranscriptEntry.emotion, func.count().label("count"))
@@ -406,7 +599,6 @@ async def dashboard_insights(
     ).all()
     emotion_dist = {row.emotion: row.count for row in emotion_rows}
 
-    # Language usage
     lang_rows = (
         await db.execute(
             select(TranscriptEntry.language, func.count().label("count"))
@@ -418,7 +610,6 @@ async def dashboard_insights(
     ).all()
     lang_usage = {row.language: row.count for row in lang_rows}
 
-    # Navigation stats
     nav_total = await db.scalar(
         select(func.count()).select_from(NavigationLog).where(NavigationLog.user_id == uid)
     ) or 0
@@ -428,19 +619,16 @@ async def dashboard_insights(
         .where(NavigationLog.user_id == uid, NavigationLog.ended_at.isnot(None))
     ) or 0
 
-    # Obstacle scans
     obstacle_total = await db.scalar(
         select(func.count())
         .select_from(APIUsage)
         .where(APIUsage.endpoint == "detect_obstacle")
     ) or 0
 
-    # SOS events
     sos_count = await db.scalar(
         select(func.count()).select_from(SOSEvent).where(SOSEvent.user_id == uid)
     ) or 0
 
-    # Recent sentences (last 5)
     recent_rows = (
         await db.execute(
             select(TranscriptEntry.text, TranscriptEntry.emotion)
@@ -452,7 +640,6 @@ async def dashboard_insights(
     ).all()
     recent = [{"text": r.text, "emotion": r.emotion} for r in recent_rows]
 
-    # Average session duration
     session_rows = (
         await db.execute(
             select(SignSession.started_at, SignSession.ended_at)
@@ -483,34 +670,10 @@ async def dashboard_insights(
         "sos_events": sos_count,
     }
 
-    # ── Call Gemini for insights ──
-    ai_insights = None
-    try:
-        if settings.gemini_api_key:
-            genai.configure(api_key=settings.gemini_api_key)
-            model = genai.GenerativeModel(
-                "gemini-2.0-flash",
-                generation_config=genai.GenerationConfig(
-                    max_output_tokens=500,
-                    temperature=0.7,
-                ),
-            )
-            prompt = INSIGHTS_PROMPT.format(data=json.dumps(stats, indent=2))
-            response = await asyncio.to_thread(
-                lambda: model.generate_content(prompt).text
-            )
-            # Strip markdown fences if present
-            cleaned = response.strip()
-            if cleaned.startswith("```"):
-                cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
-            if cleaned.endswith("```"):
-                cleaned = cleaned.rsplit("```", 1)[0]
-            cleaned = cleaned.strip()
-            ai_insights = json.loads(cleaned)
-        else:
-            logger.warning("gemini_api_key_not_set", msg="Skipping AI insights")
-    except Exception as e:
-        logger.error("gemini_insights_error", error=str(e))
+    # ── Try Gemini, fall back to local insights ──
+    ai_insights = await _try_gemini_insights(stats)
+    if ai_insights is None:
+        ai_insights = _generate_local_insights(stats)
 
     return {
         "stats": stats,
