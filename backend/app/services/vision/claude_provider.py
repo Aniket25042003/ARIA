@@ -13,9 +13,12 @@ OBSTACLE_PROMPT = (
 )
 
 SENTENCE_PROMPT = (
-    "A deaf/mute person signed these letters: '{letters}'. "
+    "A deaf person finger-spelled these ASL letters: '{letters}'. "
+    "The letters may contain recognition errors — similar-looking signs are often confused "
+    "(e.g., M/N/S/T/A/E in fist shapes, U/V/R/K with two fingers, D/G/L with one finger). "
     "Their emotion is: {emotion}. "
-    "Complete into ONE natural sentence. Return ONLY the sentence."
+    "Interpret the intended word(s), correct likely errors, and form ONE natural English sentence. "
+    "Return ONLY the sentence, nothing else."
 )
 
 TRANSLATE_PROMPT = "Translate to {language}. Return ONLY the translation: '{text}'"

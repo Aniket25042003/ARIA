@@ -35,14 +35,15 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 # Thread pool for CPU-bound work (MediaPipe, emotion detection)
-_executor = ThreadPoolExecutor(max_workers=2)
+_executor = ThreadPoolExecutor(max_workers=3)
 
 # MediaPipe Hands — initialized once, reused for all WebSocket connections
 _mp_hands = mp.solutions.hands
 _hands = _mp_hands.Hands(
-    static_image_mode=True,
+    static_image_mode=False,  # Tracking mode: temporal smoothing across frames
     max_num_hands=1,
-    min_detection_confidence=0.65,
+    min_detection_confidence=0.7,
+    min_tracking_confidence=0.6,
 )
 
 
@@ -50,11 +51,11 @@ def _extract_landmarks_sync(frame_b64: str) -> list[list[float]] | None:
     """Extract hand landmarks (CPU-bound, run in thread pool)."""
     try:
         image = decode_base64_image(frame_b64)
-        # Downscale for faster MediaPipe processing
+        # Downscale to 480px — balances accuracy and speed
         h, w = image.shape[:2]
-        if w > 320:
-            scale = 320 / w
-            image = cv2.resize(image, (320, int(h * scale)), interpolation=cv2.INTER_AREA)
+        if w > 480:
+            scale = 480 / w
+            image = cv2.resize(image, (480, int(h * scale)), interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         result = _hands.process(rgb)
         if result.multi_hand_landmarks:
@@ -113,9 +114,9 @@ async def sign_websocket(websocket: WebSocket):
                 )
 
                 if landmarks:
-                    letter = classify_asl(landmarks)
+                    letter, confidence = classify_asl(landmarks)
                     if letter:
-                        session = await append_letter(user_id, letter)
+                        session = await append_letter(user_id, letter, confidence)
                         buffer_str = "".join(session["letter_buffer"])
                         await websocket.send_json({
                             "type": "letter",

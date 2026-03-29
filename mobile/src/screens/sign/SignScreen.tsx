@@ -18,7 +18,7 @@ import LanguageSelector from "../../components/sign/LanguageSelector";
 import { colors, spacing, borderRadius, fontSize } from "../../constants/theme";
 import { a11y } from "../../constants/accessibility";
 
-const FRAME_INTERVAL_MS = 250; // 4 fps — matches backend processing speed
+const FRAME_INTERVAL_MS = 200; // 5 fps — higher rate for better stability detection
 
 export default function SignScreen() {
   const [permission, requestPermission] = useCameraPermissions();
@@ -63,7 +63,7 @@ export default function SignScreen() {
         if (!cameraRef.current) return;
         const photo = await cameraRef.current.takePictureAsync({
           base64: true,
-          quality: 0.3,
+          quality: 0.5,
           skipProcessing: true,
         });
         if (photo?.base64) {

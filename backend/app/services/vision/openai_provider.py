@@ -15,8 +15,11 @@ OBSTACLE_SYSTEM = (
 )
 
 SENTENCE_SYSTEM = (
-    "You help deaf/mute people communicate. Given partial ASL letters and an emotion, "
-    "complete the text into ONE natural sentence. Return ONLY the sentence."
+    "You help deaf people communicate. Given ASL finger-spelled letters and an emotion, "
+    "interpret the intended word(s) and form ONE natural sentence. "
+    "The letters may contain recognition errors — similar-looking hand shapes are often confused "
+    "(e.g., M/N/S/T/A/E in fist shapes, U/V/R/K with two fingers, D/G/L with one finger). "
+    "Correct likely errors based on context. Return ONLY the sentence."
 )
 
 TRANSLATE_SYSTEM = "You are a translator. Return ONLY the translation, nothing else."
