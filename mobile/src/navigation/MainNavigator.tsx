@@ -4,6 +4,7 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import HomeScreen from "../screens/home/HomeScreen";
 import SignScreen from "../screens/sign/SignScreen";
 import GuideScreen from "../screens/guide/GuideScreen";
+import DashboardScreen from "../screens/dashboard/DashboardScreen";
 import ProfileScreen from "../screens/profile/ProfileScreen";
 import { colors, shadows } from "../constants/theme";
 import type { MainTabParamList } from "./types";
@@ -84,6 +85,16 @@ export default function MainNavigator() {
             <TabIcon label="G" color={color} focused={focused} />
           ),
           title: "GUIDE Mode",
+        }}
+      />
+      <Tab.Screen
+        name="Dashboard"
+        component={DashboardScreen}
+        options={{
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon label="D" color={color} focused={focused} />
+          ),
+          title: "Dashboard",
         }}
       />
       <Tab.Screen
