@@ -15,17 +15,18 @@ from app.models.postgres.transcript import SignSession, TranscriptEntry
 from app.models.postgres.user import User
 from app.schemas.sign import SOSRequest, SpeakRequest, SpeakResponse
 from app.services.auth_service import decode_access_token
+from app.services.emotion_detector import detect_emotion_from_frame
 from app.services.session_manager import (
     add_sign,
     clear_buffer,
     delete_session,
     get_and_clear_buffer,
     get_session,
-    increment_frame_count,
     set_emotion,
     set_language,
     should_build_sentence,
 )
+from app.services.sign_classifier import classify_sign
 from app.services.sos_service import contains_sos_trigger, trigger_sos
 from app.services.tts_service import speak
 from app.services.vision.manager import vision_manager
@@ -35,8 +36,9 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 router = APIRouter()
 
-_executor = ThreadPoolExecutor(max_workers=3)
+_executor = ThreadPoolExecutor(max_workers=4)
 
+# MediaPipe — hand detection + landmark extraction only
 _mp_hands = mp.solutions.hands
 _hands = _mp_hands.Hands(
     static_image_mode=False,
@@ -45,12 +47,21 @@ _hands = _mp_hands.Hands(
     min_tracking_confidence=0.6,
 )
 
-MIN_RECOGNITION_INTERVAL = 1.5
-STABILITY_FRAMES = 3
-STABILITY_THRESHOLD = 0.025
+# Stability: need N consecutive frames with same sign to accept it
+CONFIRM_FRAMES = 3
+CONFIDENCE_THRESHOLD = 0.55
+
+# Collection window: accumulate signs, then build sentence
+COLLECTION_TIMEOUT = 10.0  # Max seconds before auto-building sentence
+NO_HAND_TRIGGER = 10  # ~2s at 5fps without hand → trigger sentence build
+MIN_SIGNS_FOR_SENTENCE = 2
+
+# Emotion detection frequency (every Nth frame)
+EMOTION_EVERY_N_FRAMES = 5
 
 
-def _extract_landmarks_sync(frame_b64: str) -> list[list[float]] | None:
+def _extract_landmarks_and_frame(frame_b64: str) -> tuple[list[list[float]] | None, np.ndarray | None]:
+    """Extract MediaPipe hand landmarks AND return the decoded frame."""
     try:
         image = decode_base64_image(frame_b64)
         h, w = image.shape[:2]
@@ -61,16 +72,11 @@ def _extract_landmarks_sync(frame_b64: str) -> list[list[float]] | None:
         result = _hands.process(rgb)
         if result.multi_hand_landmarks:
             lm = result.multi_hand_landmarks[0]
-            return [[l.x, l.y, l.z] for l in lm.landmark]
-        return None
+            landmarks = [[l.x, l.y, l.z] for l in lm.landmark]
+            return landmarks, image
+        return None, image
     except Exception:
-        return None
-
-
-def _landmark_distance(lm1: list[list[float]], lm2: list[list[float]]) -> float:
-    a = np.array(lm1)
-    b = np.array(lm2)
-    return float(np.mean(np.linalg.norm(a - b, axis=1)))
+        return None, None
 
 
 @router.websocket("/ws")
@@ -100,46 +106,13 @@ async def sign_websocket(websocket: WebSocket):
 
     loop = asyncio.get_event_loop()
 
-    # Per-connection sign tracking state
-    last_landmarks = None
-    stable_count = 0
-    last_recog_time = 0.0
-    recognizing = False
+    # Per-connection state
+    last_sign = ""
+    consecutive_count = 0
     no_hand_count = 0
-
-    async def _do_recognition(frame_b64, landmarks):
-        nonlocal recognizing, last_landmarks, stable_count, last_recog_time
-        recognizing = True
-        try:
-            result = await vision_manager.recognize_sign(frame_b64)
-            logger.info(
-                "sign_recognized",
-                sign=result.sign,
-                emotion=result.emotion,
-                provider=result.provider,
-                latency_ms=int(result.latency_ms),
-            )
-            if result.sign and result.sign != "NONE":
-                session = await add_sign(user_id, result.sign)
-                buf = " ".join(session["sign_buffer"])
-                await websocket.send_json({
-                    "type": "letter",
-                    "letter": result.sign,
-                    "buffer": buf,
-                })
-            await set_emotion(user_id, result.emotion)
-            await websocket.send_json({
-                "type": "emotion",
-                "emotion": result.emotion,
-                "confidence": result.confidence,
-            })
-            last_landmarks = landmarks
-            stable_count = 0
-            last_recog_time = time.monotonic()
-        except Exception:
-            logger.exception("sign_recognition_failed")
-        finally:
-            recognizing = False
+    collection_start: float | None = None
+    frame_number = 0
+    current_emotion = "neutral"
 
     try:
         while True:
@@ -151,39 +124,112 @@ async def sign_websocket(websocket: WebSocket):
                 if not frame_b64:
                     continue
 
-                landmarks = await loop.run_in_executor(
-                    _executor, _extract_landmarks_sync, frame_b64
+                frame_number += 1
+
+                # --- Step 1: MediaPipe hand detection ---
+                landmarks, frame_bgr = await loop.run_in_executor(
+                    _executor, _extract_landmarks_and_frame, frame_b64
                 )
 
-                if not landmarks:
+                if not landmarks or frame_bgr is None:
                     no_hand_count += 1
-                    if no_hand_count >= 5 and await should_build_sentence(user_id):
-                        await _build_and_speak(user_id, websocket, db_session_id)
-                    await increment_frame_count(user_id)
+                    # No hand for ~2 seconds → build sentence if buffer has signs
+                    if no_hand_count >= NO_HAND_TRIGGER:
+                        if await should_build_sentence(user_id, threshold=MIN_SIGNS_FOR_SENTENCE):
+                            await _build_and_speak(
+                                user_id, websocket, db_session_id, current_emotion
+                            )
+                            collection_start = None
+                            last_sign = ""
+                            consecutive_count = 0
                     continue
 
                 no_hand_count = 0
-                now = time.monotonic()
-                time_ok = (now - last_recog_time) >= MIN_RECOGNITION_INTERVAL
 
-                if last_landmarks is not None:
-                    dist = _landmark_distance(landmarks, last_landmarks)
-                    if dist < STABILITY_THRESHOLD:
-                        stable_count += 1
-                    else:
-                        stable_count = 1
-                        last_landmarks = landmarks
+                # --- Step 2: Classify sign with HuggingFace model ---
+                sign, confidence = await classify_sign(frame_bgr, landmarks)
+
+                logger.debug(
+                    "sign_classified",
+                    sign=sign,
+                    confidence=round(confidence, 3),
+                    frame=frame_number,
+                )
+
+                # Skip "nothing" / low-confidence
+                if sign in ("NOTHING", "NONE", "DEL", "") or confidence < CONFIDENCE_THRESHOLD:
+                    consecutive_count = 0
+                    last_sign = ""
+                    continue
+
+                # --- Step 3: Stability — same sign N consecutive frames → accept ---
+                if sign == last_sign:
+                    consecutive_count += 1
                 else:
-                    last_landmarks = landmarks
-                    stable_count = 1
+                    last_sign = sign
+                    consecutive_count = 1
 
-                if stable_count >= STABILITY_FRAMES and time_ok and not recognizing:
-                    asyncio.create_task(_do_recognition(frame_b64, landmarks))
+                if consecutive_count == CONFIRM_FRAMES:
+                    # Accept this sign into the buffer
+                    if sign == "SPACE":
+                        session = await get_session(user_id)
+                        buf = " ".join(session["sign_buffer"])
+                        await websocket.send_json({
+                            "type": "letter",
+                            "letter": " ",
+                            "buffer": buf + " ",
+                        })
+                    else:
+                        session = await add_sign(user_id, sign)
+                        buf = " ".join(session["sign_buffer"])
+                        await websocket.send_json({
+                            "type": "letter",
+                            "letter": sign,
+                            "buffer": buf,
+                        })
+                        logger.info(
+                            "sign_accepted",
+                            sign=sign,
+                            confidence=round(confidence, 3),
+                            buffer=buf,
+                        )
 
-                await increment_frame_count(user_id)
+                    # Start collection timer on first accepted sign
+                    if collection_start is None:
+                        collection_start = time.monotonic()
+
+                    # Reset so same sign doesn't get accepted again immediately
+                    consecutive_count = 0
+
+                # --- Step 4: Emotion detection (every Nth frame) ---
+                if frame_number % EMOTION_EVERY_N_FRAMES == 0:
+                    emo, emo_conf = await loop.run_in_executor(
+                        _executor, detect_emotion_from_frame, frame_b64
+                    )
+                    if emo != "neutral" or emo_conf > 0.4:
+                        current_emotion = emo
+                        await set_emotion(user_id, emo)
+                        await websocket.send_json({
+                            "type": "emotion",
+                            "emotion": emo,
+                            "confidence": emo_conf,
+                        })
+
+                # --- Step 5: Collection timeout (max 10s) ---
+                if collection_start and (time.monotonic() - collection_start) >= COLLECTION_TIMEOUT:
+                    if await should_build_sentence(user_id, threshold=MIN_SIGNS_FOR_SENTENCE):
+                        await _build_and_speak(
+                            user_id, websocket, db_session_id, current_emotion
+                        )
+                    collection_start = None
+                    last_sign = ""
+                    consecutive_count = 0
 
             elif msg_type == "clear_buffer":
                 await clear_buffer(user_id)
+                collection_start = None
+                last_sign = ""
+                consecutive_count = 0
                 await websocket.send_json({"type": "letter", "letter": "", "buffer": ""})
 
             elif msg_type == "set_language":
@@ -197,7 +243,9 @@ async def sign_websocket(websocket: WebSocket):
         try:
             s = await get_session(user_id)
             if s["sign_buffer"]:
-                await _build_and_speak(user_id, websocket, db_session_id)
+                await _build_and_speak(
+                    user_id, websocket, db_session_id, current_emotion
+                )
         except Exception:
             pass
         await delete_session(user_id)
@@ -205,7 +253,9 @@ async def sign_websocket(websocket: WebSocket):
             try:
                 async with async_session_factory() as db:
                     from datetime import datetime, timezone
+
                     from sqlalchemy import update
+
                     await db.execute(
                         update(SignSession)
                         .where(SignSession.id == db_session_id)
@@ -216,11 +266,13 @@ async def sign_websocket(websocket: WebSocket):
                 pass
 
 
-async def _build_and_speak(user_id, websocket, db_session_id):
-    raw_text, emotion = await get_and_clear_buffer(user_id)
+async def _build_and_speak(user_id, websocket, db_session_id, emotion_override=None):
+    """Collect signs from buffer → Gemini LLM for sentence → ElevenLabs TTS."""
+    raw_text, session_emotion = await get_and_clear_buffer(user_id)
     if not raw_text:
         return
 
+    emotion = emotion_override or session_emotion
     logger.info("building_sentence", raw_text=raw_text, emotion=emotion)
 
     if contains_sos_trigger(raw_text):
@@ -234,6 +286,7 @@ async def _build_and_speak(user_id, websocket, db_session_id):
         })
         return
 
+    # Send collected signs to Gemini LLM for natural sentence generation
     try:
         result = await vision_manager.build_sentence(raw_text, emotion)
         sentence = result.text
@@ -248,6 +301,7 @@ async def _build_and_speak(user_id, websocket, db_session_id):
         logger.exception("build_sentence_failed", raw=raw_text)
         sentence = raw_text
 
+    # Translate if non-English
     lang_session = await get_session(user_id)
     lang = lang_session.get("language", "en")
     if lang != "en":
@@ -257,6 +311,7 @@ async def _build_and_speak(user_id, websocket, db_session_id):
         except Exception:
             pass
 
+    # ElevenLabs TTS with emotion
     audio_file = await speak(sentence, emotion=emotion)
 
     if db_session_id:
@@ -323,6 +378,7 @@ async def get_transcript(
     db: AsyncSession = Depends(get_db),
 ):
     from sqlalchemy import select
+
     result = await db.execute(
         select(TranscriptEntry)
         .where(TranscriptEntry.session_id == uuid.UUID(session_id))
