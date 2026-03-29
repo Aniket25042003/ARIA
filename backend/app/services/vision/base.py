@@ -47,6 +47,13 @@ class VisionProvider(ABC):
         """
         raise NotImplementedError
 
+    async def describe_sign_sequence(self, frames_b64: list[str]) -> VisionResult:
+        """Analyze a sequence of frames for ASL signs and emotion.
+
+        Default: raises NotImplementedError so manager skips to next provider.
+        """
+        raise NotImplementedError
+
     @abstractmethod
     async def health_check(self) -> bool:
         """Return True if this provider is currently available."""

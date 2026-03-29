@@ -1,11 +1,7 @@
 import asyncio
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 
-import cv2
-import mediapipe as mp
-import numpy as np
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,69 +12,24 @@ from app.models.postgres.user import User
 from app.schemas.sign import SOSRequest, SpeakRequest, SpeakResponse
 from app.services.auth_service import decode_access_token
 from app.services.session_manager import (
-    add_sign,
     clear_buffer,
     delete_session,
-    get_and_clear_buffer,
     get_session,
-    set_emotion,
     set_language,
-    should_build_sentence,
 )
 from app.services.sos_service import contains_sos_trigger, trigger_sos
 from app.services.tts_service import speak
 from app.services.vision.manager import vision_manager
-from app.utils.image import decode_base64_image
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 router = APIRouter()
 
-_executor = ThreadPoolExecutor(max_workers=3)
-
-# MediaPipe — hand detection only (to know WHEN to call Bedrock)
-_mp_hands = mp.solutions.hands
-_hands = _mp_hands.Hands(
-    static_image_mode=False,
-    max_num_hands=1,
-    min_detection_confidence=0.7,
-    min_tracking_confidence=0.6,
-)
-
-# Stability detection via landmark distance
-STABILITY_FRAMES = 3
-STABILITY_THRESHOLD = 0.025
-MIN_RECOGNITION_INTERVAL = 1.5  # Seconds between Bedrock calls
-
-# Collection window
-COLLECTION_TIMEOUT = 10.0  # Max seconds before auto-building sentence
-NO_HAND_TRIGGER = 10  # ~2s at 5fps without hand → trigger sentence build
-MIN_SIGNS_FOR_SENTENCE = 2
-
-
-def _extract_landmarks_sync(frame_b64: str) -> list[list[float]] | None:
-    """Extract hand landmarks using MediaPipe. Returns None if no hand."""
-    try:
-        image = decode_base64_image(frame_b64)
-        h, w = image.shape[:2]
-        if w > 480:
-            scale = 480 / w
-            image = cv2.resize(image, (480, int(h * scale)), interpolation=cv2.INTER_AREA)
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        result = _hands.process(rgb)
-        if result.multi_hand_landmarks:
-            lm = result.multi_hand_landmarks[0]
-            return [[l.x, l.y, l.z] for l in lm.landmark]
-        return None
-    except Exception:
-        return None
-
-
-def _landmark_distance(lm1: list[list[float]], lm2: list[list[float]]) -> float:
-    """Average Euclidean distance between two landmark sets."""
-    a = np.array(lm1)
-    b = np.array(lm2)
-    return float(np.mean(np.linalg.norm(a - b, axis=1)))
+# Frame collection settings
+COLLECTION_WINDOW_S = 7.0     # Collect frames for 7 seconds
+SAMPLE_FRAMES = 8             # Sample this many frames from the window (evenly spaced)
+MAX_BUFFERED_FRAMES = 50      # Max frames to hold in memory (~10s at 5fps)
+IDLE_TIMEOUT_S = 3.0          # Seconds without frames before auto-processing
 
 
 @router.websocket("/ws")
@@ -106,67 +57,139 @@ async def sign_websocket(websocket: WebSocket):
     except Exception:
         logger.exception("sign_session_create_error")
 
-    loop = asyncio.get_event_loop()
-
     # Per-connection state
-    last_landmarks = None
-    stable_count = 0
-    last_recog_time = 0.0
-    recognizing = False
-    no_hand_count = 0
+    frame_buffer: list[str] = []       # Collected base64 frames
     collection_start: float | None = None
-    current_emotion = "neutral"
+    last_frame_time: float = time.monotonic()
+    processing = False                  # True while pipeline is running
+    language = "en"
 
-    async def _do_recognition(frame_b64, landmarks):
-        """Send frame to Bedrock vision → get sign + emotion."""
-        nonlocal recognizing, last_landmarks, stable_count, last_recog_time, current_emotion
-        recognizing = True
+    async def _process_frames():
+        """Take buffered frames → Bedrock vision → Bedrock sentence → TTS → send."""
+        nonlocal frame_buffer, collection_start, processing
+
+        if not frame_buffer or processing:
+            return
+
+        processing = True
+        frames = frame_buffer.copy()
+        frame_buffer.clear()
+        collection_start = None
+
         try:
-            result = await vision_manager.recognize_sign(frame_b64)
+            # Sample evenly spaced frames
+            sampled = _sample_frames(frames, SAMPLE_FRAMES)
             logger.info(
-                "sign_recognized",
-                sign=result.sign,
-                emotion=result.emotion,
-                provider=result.provider,
-                latency_ms=int(result.latency_ms),
+                "processing_frames",
+                total_frames=len(frames),
+                sampled=len(sampled),
+                user_id=user_id,
             )
 
-            # Update emotion from vision model
-            if result.emotion and result.emotion != "neutral":
-                current_emotion = result.emotion
-                await set_emotion(user_id, result.emotion)
+            # Step 1: Bedrock Vision — describe ASL signs from frames
+            vision_result = await vision_manager.describe_sign_sequence(sampled)
+            signs, emotion = _parse_vision_output(vision_result.text)
+            logger.info(
+                "vision_described",
+                signs=signs,
+                emotion=emotion,
+                provider=vision_result.provider,
+                latency_ms=int(vision_result.latency_ms),
+            )
+
+            # Send intermediate result to client
+            await websocket.send_json({
+                "type": "signs_detected",
+                "signs": signs,
+                "emotion": emotion,
+            })
+
+            if signs.upper() == "NONE" or not signs.strip():
                 await websocket.send_json({
-                    "type": "emotion",
-                    "emotion": result.emotion,
-                    "confidence": result.confidence,
+                    "type": "status",
+                    "message": "No signs detected, keep signing...",
                 })
+                return
 
-            # Accept sign if valid
-            if result.sign and result.sign != "NONE":
-                session = await add_sign(user_id, result.sign)
-                buf = " ".join(session["sign_buffer"])
+            # Check for SOS trigger
+            if contains_sos_trigger(signs):
+                async with async_session_factory() as db:
+                    sentence, audio_file = await trigger_sos(user_id, db)
+                    await db.commit()
                 await websocket.send_json({
-                    "type": "letter",
-                    "letter": result.sign,
-                    "buffer": buf,
+                    "type": "sos_triggered",
+                    "text": sentence,
+                    "audio_url": f"/audio/{audio_file}",
                 })
+                return
 
-                # Start collection timer on first sign
-                nonlocal collection_start
-                if collection_start is None:
-                    collection_start = time.monotonic()
+            # Step 2: Bedrock Text — generate natural sentence from signs
+            sentence_result = await vision_manager.build_sentence(signs, emotion)
+            sentence = sentence_result.text
+            logger.info(
+                "sentence_built",
+                raw=signs,
+                sentence=sentence,
+                provider=sentence_result.provider,
+                latency_ms=int(sentence_result.latency_ms),
+            )
 
-            last_landmarks = landmarks
-            stable_count = 0
-            last_recog_time = time.monotonic()
+            # Translate if non-English
+            if language != "en":
+                try:
+                    tr = await vision_manager.translate(sentence, language)
+                    sentence = tr.text
+                except Exception:
+                    pass
+
+            # Step 3: ElevenLabs TTS — generate speech with emotion
+            audio_file = await speak(sentence, emotion=emotion)
+
+            # Save transcript
+            if db_session_id:
+                asyncio.create_task(_save_transcript(
+                    db_session_id, sentence, signs, emotion, language
+                ))
+
+            # Send final result to client
+            await websocket.send_json({
+                "type": "sentence",
+                "text": sentence,
+                "emotion": emotion,
+                "audio_url": f"/audio/{audio_file}",
+            })
+
         except Exception:
-            logger.exception("sign_recognition_failed")
+            logger.exception("pipeline_error", user_id=user_id)
+            try:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Processing failed, please try again",
+                })
+            except Exception:
+                pass
         finally:
-            recognizing = False
+            processing = False
 
     try:
         while True:
-            data = await websocket.receive_json()
+            # Use a timeout so we can detect idle periods
+            try:
+                data = await asyncio.wait_for(
+                    websocket.receive_json(),
+                    timeout=1.0,
+                )
+            except asyncio.TimeoutError:
+                # Check if we should auto-process due to idle
+                now = time.monotonic()
+                if (
+                    frame_buffer
+                    and not processing
+                    and (now - last_frame_time) >= IDLE_TIMEOUT_S
+                ):
+                    await _process_frames()
+                continue
+
             msg_type = data.get("type")
 
             if msg_type == "frame":
@@ -174,71 +197,46 @@ async def sign_websocket(websocket: WebSocket):
                 if not frame_b64:
                     continue
 
-                # Step 1: MediaPipe hand detection (local, fast)
-                landmarks = await loop.run_in_executor(
-                    _executor, _extract_landmarks_sync, frame_b64
-                )
+                last_frame_time = time.monotonic()
 
-                if not landmarks:
-                    no_hand_count += 1
-                    # No hand for ~2s → build sentence if buffer has signs
-                    if no_hand_count >= NO_HAND_TRIGGER:
-                        if await should_build_sentence(user_id, threshold=MIN_SIGNS_FOR_SENTENCE):
-                            await _build_and_speak(
-                                user_id, websocket, db_session_id, current_emotion
-                            )
-                            collection_start = None
-                    continue
+                # Start collection window on first frame
+                if collection_start is None:
+                    collection_start = last_frame_time
 
-                no_hand_count = 0
-                now = time.monotonic()
-                time_ok = (now - last_recog_time) >= MIN_RECOGNITION_INTERVAL
+                # Buffer the frame
+                if len(frame_buffer) < MAX_BUFFERED_FRAMES:
+                    frame_buffer.append(frame_b64)
 
-                # Step 2: Stability detection — hand must be still before calling Bedrock
-                if last_landmarks is not None:
-                    dist = _landmark_distance(landmarks, last_landmarks)
-                    if dist < STABILITY_THRESHOLD:
-                        stable_count += 1
-                    else:
-                        stable_count = 1
-                        last_landmarks = landmarks
-                else:
-                    last_landmarks = landmarks
-                    stable_count = 1
-
-                # Step 3: When stable + enough time passed → send to Bedrock vision
-                if stable_count >= STABILITY_FRAMES and time_ok and not recognizing:
-                    asyncio.create_task(_do_recognition(frame_b64, landmarks))
-
-                # Step 4: Collection timeout (max 10s)
-                if collection_start and (now - collection_start) >= COLLECTION_TIMEOUT:
-                    if await should_build_sentence(user_id, threshold=MIN_SIGNS_FOR_SENTENCE):
-                        await _build_and_speak(
-                            user_id, websocket, db_session_id, current_emotion
-                        )
-                    collection_start = None
+                # Check if collection window is complete
+                elapsed = last_frame_time - collection_start
+                if elapsed >= COLLECTION_WINDOW_S and not processing:
+                    await _process_frames()
 
             elif msg_type == "clear_buffer":
-                await clear_buffer(user_id)
+                frame_buffer.clear()
                 collection_start = None
                 await websocket.send_json({"type": "letter", "letter": "", "buffer": ""})
 
             elif msg_type == "set_language":
-                await set_language(user_id, data.get("language", "en"))
+                language = data.get("language", "en")
+                await set_language(user_id, language)
+
+            elif msg_type == "force_process":
+                # Allow client to manually trigger processing
+                if frame_buffer and not processing:
+                    await _process_frames()
 
     except WebSocketDisconnect:
         logger.info("sign_ws_disconnected", user_id=user_id)
     except Exception:
         logger.exception("sign_ws_error", user_id=user_id)
     finally:
-        try:
-            s = await get_session(user_id)
-            if s["sign_buffer"]:
-                await _build_and_speak(
-                    user_id, websocket, db_session_id, current_emotion
-                )
-        except Exception:
-            pass
+        # Process any remaining frames before disconnect
+        if frame_buffer and not processing:
+            try:
+                await _process_frames()
+            except Exception:
+                pass
         await delete_session(user_id)
         if db_session_id:
             try:
@@ -257,65 +255,28 @@ async def sign_websocket(websocket: WebSocket):
                 pass
 
 
-async def _build_and_speak(user_id, websocket, db_session_id, emotion_override=None):
-    """Collect signs from buffer → Bedrock LLM for sentence → ElevenLabs TTS."""
-    raw_text, session_emotion = await get_and_clear_buffer(user_id)
-    if not raw_text:
-        return
+def _sample_frames(frames: list[str], n: int) -> list[str]:
+    """Evenly sample n frames from the list."""
+    if len(frames) <= n:
+        return frames
+    step = len(frames) / n
+    return [frames[int(i * step)] for i in range(n)]
 
-    emotion = emotion_override or session_emotion
-    logger.info("building_sentence", raw_text=raw_text, emotion=emotion)
 
-    if contains_sos_trigger(raw_text):
-        async with async_session_factory() as db:
-            sentence, audio_file = await trigger_sos(user_id, db)
-            await db.commit()
-        await websocket.send_json({
-            "type": "sos_triggered",
-            "text": sentence,
-            "audio_url": f"/audio/{audio_file}",
-        })
-        return
-
-    # Send collected signs to Bedrock LLM for natural sentence generation
-    try:
-        result = await vision_manager.build_sentence(raw_text, emotion)
-        sentence = result.text
-        logger.info(
-            "sentence_built",
-            raw=raw_text,
-            sentence=sentence,
-            provider=result.provider,
-            latency_ms=int(result.latency_ms),
-        )
-    except Exception:
-        logger.exception("build_sentence_failed", raw=raw_text)
-        sentence = raw_text
-
-    # Translate if non-English
-    lang_session = await get_session(user_id)
-    lang = lang_session.get("language", "en")
-    if lang != "en":
-        try:
-            tr = await vision_manager.translate(sentence, lang)
-            sentence = tr.text
-        except Exception:
-            pass
-
-    # ElevenLabs TTS with emotion
-    audio_file = await speak(sentence, emotion=emotion)
-
-    if db_session_id:
-        asyncio.create_task(_save_transcript(
-            db_session_id, sentence, raw_text, emotion, lang
-        ))
-
-    await websocket.send_json({
-        "type": "sentence",
-        "text": sentence,
-        "emotion": emotion,
-        "audio_url": f"/audio/{audio_file}",
-    })
+def _parse_vision_output(text: str) -> tuple[str, str]:
+    """Parse 'SIGNS: ...\nEMOTION: ...' from vision model output."""
+    signs = "NONE"
+    emotion = "neutral"
+    for line in text.strip().splitlines():
+        line = line.strip()
+        if line.upper().startswith("SIGNS:"):
+            signs = line.split(":", 1)[1].strip()
+        elif line.upper().startswith("EMOTION:"):
+            emotion = line.split(":", 1)[1].strip().lower()
+            valid = {"happy", "sad", "angry", "fear", "surprise", "disgust", "neutral"}
+            if emotion not in valid:
+                emotion = "neutral"
+    return signs, emotion
 
 
 async def _save_transcript(session_id, text, raw_signs, emotion, language):

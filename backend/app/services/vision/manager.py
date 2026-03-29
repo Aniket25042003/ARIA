@@ -73,6 +73,9 @@ class VisionManager:
     async def recognize_sign(self, image_b64: str) -> SignRecognitionResult:
         return await self._call_with_fallback("recognize_sign", image_b64)
 
+    async def describe_sign_sequence(self, frames_b64: list[str]) -> VisionResult:
+        return await self._call_with_fallback("describe_sign_sequence", frames_b64)
+
     async def build_sentence(self, partial_text: str, emotion: str) -> VisionResult:
         return await self._call_with_fallback("build_sentence", partial_text, emotion)
 
@@ -84,6 +87,8 @@ class VisionManager:
             raise VisionProviderUnavailableError("No vision providers available")
 
         last_error = None
+        # Multi-frame sequence analysis needs more time
+        timeout = 15.0 if method == "describe_sign_sequence" else 5.0
 
         for provider in self._providers:
             if not self._health_cache.get(provider.name, True):
@@ -91,10 +96,9 @@ class VisionManager:
 
             start = time.monotonic()
             try:
-                # 5-second timeout per provider — fail fast, fall through quickly
                 result = await asyncio.wait_for(
                     getattr(provider, method)(*args),
-                    timeout=5.0,
+                    timeout=timeout,
                 )
                 latency = (time.monotonic() - start) * 1000
                 self._fail_counts[provider.name] = 0

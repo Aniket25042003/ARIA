@@ -21,7 +21,16 @@ export function useSignWebSocket() {
     (data: WSServerMessage) => {
       switch (data.type) {
         case "letter":
-          setCurrentBuffer(data.buffer);
+          setCurrentBuffer(data.buffer ?? "");
+          break;
+
+        case "signs_detected":
+          setCurrentBuffer(data.signs ?? "");
+          if (data.emotion) setCurrentEmotion(data.emotion);
+          break;
+
+        case "status":
+          // Informational status messages from backend
           break;
 
         case "emotion":

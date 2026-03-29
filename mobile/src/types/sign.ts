@@ -58,6 +58,17 @@ export interface WSSOSMessage {
   audio_url: string;
 }
 
+export interface WSSignsDetectedMessage {
+  type: "signs_detected";
+  signs: string;
+  emotion: EmotionType;
+}
+
+export interface WSStatusMessage {
+  type: "status";
+  message: string;
+}
+
 export interface WSErrorMessage {
   type: "error";
   message: string;
@@ -68,4 +79,6 @@ export type WSServerMessage =
   | WSEmotionMessage
   | WSSentenceMessage
   | WSSOSMessage
+  | WSSignsDetectedMessage
+  | WSStatusMessage
   | WSErrorMessage;
