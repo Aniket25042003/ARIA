@@ -4,61 +4,92 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
+  Animated,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useGuideStore } from "../../stores/useGuideStore";
 import { useObstacleScanner } from "../../hooks/useObstacleScanner";
 import ObstacleOverlay from "../../components/guide/ObstacleOverlay";
-import { colors, spacing, borderRadius, fontSize } from "../../constants/theme";
+import { colors, spacing, borderRadius, fontSize, shadows } from "../../constants/theme";
 import { a11y } from "../../constants/accessibility";
 
 export default function GuideScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
 
-  const {
-    isScanning,
-    lastWarning,
-    lastSeverity,
-  } = useGuideStore();
-
+  const { isScanning, lastWarning, lastSeverity } = useGuideStore();
   const { startScanning, stopScanning } = useObstacleScanner(cameraRef);
+
+  // Animations
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scanPulse = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     requestPermission();
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 400,
+      useNativeDriver: true,
+    }).start();
   }, []);
+
+  useEffect(() => {
+    if (isScanning) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(scanPulse, { toValue: 1.02, duration: 800, useNativeDriver: true }),
+          Animated.timing(scanPulse, { toValue: 1, duration: 800, useNativeDriver: true }),
+        ])
+      ).start();
+    } else {
+      scanPulse.setValue(1);
+    }
+  }, [isScanning]);
 
   if (!permission) return <View style={styles.container} />;
 
   if (!permission.granted) {
     return (
       <View style={styles.permContainer}>
-        <Text style={styles.permText}>
-          Camera access is needed for GUIDE mode to detect obstacles in your path
-        </Text>
-        <TouchableOpacity style={styles.permBtn} onPress={requestPermission}>
-          <Text style={styles.permBtnText}>Grant Camera Permission</Text>
-        </TouchableOpacity>
+        <View style={styles.permCard}>
+          <Text style={styles.permIcon}>G</Text>
+          <Text style={styles.permTitle}>Camera Access Needed</Text>
+          <Text style={styles.permText}>
+            GUIDE mode needs your camera to detect obstacles in your path and keep you safe
+          </Text>
+          <TouchableOpacity style={styles.permBtn} onPress={requestPermission} activeOpacity={0.8}>
+            <LinearGradient
+              colors={[colors.accent, colors.accentDark]}
+              style={styles.permBtnGradient}
+            >
+              <Text style={styles.permBtnText}>Grant Permission</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
       {/* Camera with obstacle overlay */}
-      <CameraView ref={cameraRef} style={styles.camera} facing="back">
-        <ObstacleOverlay
-          warning={lastWarning}
-          severity={lastSeverity}
-          isScanning={isScanning}
-        />
-      </CameraView>
+      <Animated.View style={[styles.cameraWrapper, { transform: [{ scale: scanPulse }] }]}>
+        <CameraView ref={cameraRef} style={styles.camera} facing="back">
+          <ObstacleOverlay
+            warning={lastWarning}
+            severity={lastSeverity}
+            isScanning={isScanning}
+          />
+        </CameraView>
+      </Animated.View>
 
       {/* Scan toggle */}
       <View style={styles.controls}>
         <TouchableOpacity
           style={[styles.scanBtn, isScanning && styles.scanBtnActive]}
           onPress={isScanning ? stopScanning : startScanning}
+          activeOpacity={0.8}
           accessibilityLabel={
             isScanning
               ? a11y.guide.stopScanning.label
@@ -71,12 +102,22 @@ export default function GuideScreen() {
           }
           accessibilityRole="button"
         >
-          <Text style={styles.scanBtnText}>
-            {isScanning ? "Stop Scanning" : "Start Scanning"}
-          </Text>
+          {isScanning ? (
+            <View style={styles.scanBtnInner}>
+              <View style={styles.stopIcon} />
+              <Text style={styles.scanBtnTextActive}>Stop Scanning</Text>
+            </View>
+          ) : (
+            <LinearGradient
+              colors={[colors.accent, colors.accentDark]}
+              style={styles.scanBtnGradient}
+            >
+              <Text style={styles.scanBtnText}>Start Scanning</Text>
+            </LinearGradient>
+          )}
         </TouchableOpacity>
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -92,23 +133,54 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: spacing.xxl,
   },
-  permText: {
+  permCard: {
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.xxl,
+    padding: spacing.xxxl,
+    alignItems: "center",
+    width: "100%",
+    ...shadows.lg,
+  },
+  permIcon: {
+    fontSize: 40,
+    fontWeight: "800",
+    color: colors.accent,
+    marginBottom: spacing.lg,
+  },
+  permTitle: {
+    fontSize: fontSize.xxl,
+    fontWeight: "700",
     color: colors.text,
+    marginBottom: spacing.sm,
+  },
+  permText: {
+    color: colors.textSecondary,
     textAlign: "center",
-    marginBottom: spacing.xl,
-    fontSize: fontSize.xl,
-    lineHeight: 24,
+    marginBottom: spacing.xxl,
+    fontSize: fontSize.md,
+    lineHeight: 22,
   },
   permBtn: {
-    backgroundColor: colors.successBorder,
-    borderRadius: borderRadius.md,
+    borderRadius: borderRadius.lg,
+    overflow: "hidden",
+    width: "100%",
+  },
+  permBtnGradient: {
     padding: spacing.lg,
-    paddingHorizontal: spacing.xxxl,
+    alignItems: "center",
+    borderRadius: borderRadius.lg,
   },
   permBtnText: {
-    color: colors.text,
-    fontWeight: "600",
+    color: "#fff",
+    fontWeight: "700",
     fontSize: fontSize.xl,
+  },
+  cameraWrapper: {
+    flex: 1,
+    margin: spacing.md,
+    borderRadius: borderRadius.xl,
+    overflow: "hidden",
+    ...shadows.lg,
   },
   camera: {
     flex: 1,
@@ -116,22 +188,44 @@ const styles = StyleSheet.create({
   controls: {
     backgroundColor: colors.background,
     padding: spacing.lg,
-    gap: spacing.md,
   },
   scanBtn: {
-    backgroundColor: "#0a1a2e",
-    borderWidth: 1,
-    borderColor: "#2563eb",
     borderRadius: borderRadius.lg,
-    padding: spacing.lg,
-    alignItems: "center",
+    overflow: "hidden",
   },
   scanBtnActive: {
-    backgroundColor: "#2563eb",
+    backgroundColor: colors.surface,
+    borderWidth: 2,
+    borderColor: colors.danger,
+    borderRadius: borderRadius.lg,
+  },
+  scanBtnInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: spacing.lg,
+    gap: spacing.sm,
+  },
+  stopIcon: {
+    width: 16,
+    height: 16,
+    borderRadius: 3,
+    backgroundColor: colors.danger,
+  },
+  scanBtnGradient: {
+    padding: spacing.lg,
+    alignItems: "center",
+    borderRadius: borderRadius.lg,
+    ...shadows.md,
   },
   scanBtnText: {
-    color: colors.text,
+    color: "#fff",
     fontSize: fontSize.xl,
-    fontWeight: "600",
+    fontWeight: "700",
+  },
+  scanBtnTextActive: {
+    color: colors.danger,
+    fontSize: fontSize.xl,
+    fontWeight: "700",
   },
 });

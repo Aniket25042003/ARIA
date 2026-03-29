@@ -1,5 +1,5 @@
-import React from "react";
-import { View, Text, StyleSheet } from "react-native";
+import React, { useEffect, useRef } from "react";
+import { View, Text, StyleSheet, Animated } from "react-native";
 import { colors, spacing, borderRadius, fontSize } from "../../constants/theme";
 
 interface Props {
@@ -8,35 +8,76 @@ interface Props {
   isScanning: boolean;
 }
 
-const SEVERITY_COLORS = {
-  clear: colors.success,
-  caution: colors.warning,
-  danger: colors.dangerLight,
+const SEVERITY_CONFIG = {
+  clear: { color: colors.success, bg: "rgba(0, 184, 148, 0.15)", label: "CLEAR" },
+  caution: { color: colors.warningDark, bg: "rgba(253, 203, 110, 0.2)", label: "CAUTION" },
+  danger: { color: colors.danger, bg: "rgba(232, 72, 72, 0.2)", label: "DANGER" },
 };
 
 export default function ObstacleOverlay({ warning, severity, isScanning }: Props) {
-  const severityColor = SEVERITY_COLORS[severity];
+  const config = SEVERITY_CONFIG[severity];
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scanDotAnim = useRef(new Animated.Value(0.3)).current;
+
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
+  useEffect(() => {
+    if (severity === "danger") {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1.03, duration: 400, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
+        ])
+      ).start();
+    } else {
+      pulseAnim.setValue(1);
+    }
+  }, [severity]);
+
+  useEffect(() => {
+    if (isScanning) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(scanDotAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
+          Animated.timing(scanDotAnim, { toValue: 0.3, duration: 600, useNativeDriver: true }),
+        ])
+      ).start();
+    }
+  }, [isScanning]);
 
   return (
-    <View style={styles.overlay}>
-      <View
-        style={[styles.warningBanner, { borderColor: severityColor }]}
+    <Animated.View style={[styles.overlay, { opacity: fadeAnim }]}>
+      <Animated.View
+        style={[
+          styles.warningBanner,
+          { backgroundColor: config.bg, borderColor: config.color + "60" },
+          { transform: [{ scale: pulseAnim }] },
+        ]}
         accessibilityLabel={`Obstacle warning: ${warning}. Severity: ${severity}`}
         accessibilityLiveRegion="assertive"
       >
-        <Text style={[styles.severityText, { color: severityColor }]}>
-          {severity.toUpperCase()}
-        </Text>
+        <View style={[styles.severityBadge, { backgroundColor: config.color }]}>
+          <Text style={styles.severityBadgeText}>{config.label}</Text>
+        </View>
         <Text style={styles.warningText}>{warning}</Text>
-      </View>
+      </Animated.View>
 
       {isScanning && (
         <View style={styles.scanIndicator}>
-          <Text style={styles.scanDot}>●</Text>
+          <Animated.View style={[styles.scanDotOuter, { opacity: scanDotAnim }]}>
+            <View style={styles.scanDotInner} />
+          </Animated.View>
           <Text style={styles.scanLabel}>Scanning for obstacles</Text>
         </View>
       )}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -47,23 +88,32 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   warningBanner: {
-    backgroundColor: "rgba(0,0,0,0.75)",
-    borderRadius: borderRadius.md,
-    padding: spacing.lg - 2,
+    borderRadius: borderRadius.xl,
+    padding: spacing.lg,
     marginTop: spacing.sm,
-    borderWidth: 1,
+    borderWidth: 1.5,
   },
-  severityText: {
+  severityBadge: {
+    alignSelf: "flex-start",
+    borderRadius: borderRadius.round,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  severityBadgeText: {
     fontSize: fontSize.xs,
-    fontWeight: "700",
-    letterSpacing: 1,
-    marginBottom: spacing.xs,
+    fontWeight: "800",
+    color: "#fff",
+    letterSpacing: 1.5,
   },
   warningText: {
-    color: colors.text,
+    color: "#fff",
     fontSize: fontSize.xxl,
-    fontWeight: "500",
+    fontWeight: "600",
     textAlign: "center",
+    textShadowColor: "rgba(0,0,0,0.5)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
   scanIndicator: {
     flexDirection: "row",
@@ -71,16 +121,28 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: spacing.sm,
   },
-  scanDot: {
-    color: colors.dangerLight,
-    fontSize: fontSize.xl,
+  scanDotOuter: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "rgba(232, 72, 72, 0.3)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  scanDotInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.danger,
   },
   scanLabel: {
-    color: colors.text,
+    color: "#fff",
     fontSize: fontSize.md,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    paddingHorizontal: spacing.sm + 2,
+    fontWeight: "600",
+    backgroundColor: "rgba(0,0,0,0.5)",
+    paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
     borderRadius: borderRadius.round,
+    overflow: "hidden",
   },
 });

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -6,16 +6,14 @@ import {
   TextInput,
   StyleSheet,
   Alert,
+  Animated,
+  ScrollView,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { useAuthStore } from "../../stores/useAuthStore";
 import { useConnectionStore } from "../../stores/useConnectionStore";
 import { BACKEND_URL as DEFAULT_BACKEND_URL } from "../../constants/config";
-import {
-  colors,
-  spacing,
-  borderRadius,
-  fontSize,
-} from "../../constants/theme";
+import { colors, spacing, borderRadius, fontSize, shadows } from "../../constants/theme";
 
 export default function ProfileScreen() {
   const { userName, logout } = useAuthStore();
@@ -23,8 +21,22 @@ export default function ProfileScreen() {
     useConnectionStore();
   const [urlInput, setUrlInput] = useState(backendUrl);
   const [saving, setSaving] = useState(false);
+  const [urlFocused, setUrlFocused] = useState(false);
 
   const isCustomUrl = backendUrl !== DEFAULT_BACKEND_URL;
+
+  // Animations
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(30)).current;
+  const avatarScale = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 500, useNativeDriver: true }),
+      Animated.spring(avatarScale, { toValue: 1, tension: 50, friction: 7, useNativeDriver: true }),
+    ]).start();
+  }, []);
 
   const handleSaveUrl = async () => {
     const trimmed = urlInput.trim();
@@ -33,10 +45,7 @@ export default function ProfileScreen() {
       return;
     }
     if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
-      Alert.alert(
-        "Invalid URL",
-        "URL must start with http:// or https://"
-      );
+      Alert.alert("Invalid URL", "URL must start with http:// or https://");
       return;
     }
     setSaving(true);
@@ -50,96 +59,138 @@ export default function ProfileScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>
-            {userName?.charAt(0)?.toUpperCase() || "?"}
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Profile Header */}
+      <Animated.View
+        style={[
+          styles.header,
+          { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
+        ]}
+      >
+        <Animated.View style={[styles.avatarContainer, { transform: [{ scale: avatarScale }] }]}>
+          <LinearGradient
+            colors={[colors.primary, colors.primaryLight]}
+            style={styles.avatar}
+          >
+            <Text style={styles.avatarText}>
+              {userName?.charAt(0)?.toUpperCase() || "?"}
+            </Text>
+          </LinearGradient>
+        </Animated.View>
+        <Text style={styles.name}>{userName || "User"}</Text>
+      </Animated.View>
+
+      {/* Server Connection Card */}
+      <Animated.View
+        style={[
+          styles.card,
+          { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
+        ]}
+      >
+        <Text style={styles.sectionTitle}>Server Connection</Text>
+        <Text style={styles.hint}>
+          Enter your backend URL or tunnel URL (e.g. ngrok, cloudflared) to connect across networks.
+        </Text>
+
+        <View style={[styles.inputContainer, urlFocused && styles.inputFocused]}>
+          <Text style={styles.inputLabel}>BACKEND URL</Text>
+          <TextInput
+            style={styles.urlInput}
+            value={urlInput}
+            onChangeText={setUrlInput}
+            onFocus={() => setUrlFocused(true)}
+            onBlur={() => setUrlFocused(false)}
+            placeholder="https://your-tunnel-url.trycloudflare.com"
+            placeholderTextColor={colors.textPlaceholder}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+        </View>
+
+        <View style={styles.urlActions}>
+          <TouchableOpacity
+            style={[styles.saveBtn, saving && styles.btnDisabled]}
+            onPress={handleSaveUrl}
+            disabled={saving}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Save server URL"
+          >
+            <LinearGradient
+              colors={[colors.primary, colors.primaryDark]}
+              style={styles.saveBtnGradient}
+            >
+              <Text style={styles.saveBtnText}>
+                {saving ? "Saving..." : "Save"}
+              </Text>
+            </LinearGradient>
+          </TouchableOpacity>
+
+          {isCustomUrl && (
+            <TouchableOpacity
+              style={styles.resetBtn}
+              onPress={handleReset}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Reset to default URL"
+            >
+              <Text style={styles.resetBtnText}>Reset</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Status */}
+        <View style={[
+          styles.statusCard,
+          backendChecked && backendConnected && styles.statusConnectedCard,
+          backendChecked && !backendConnected && styles.statusDisconnectedCard,
+        ]}>
+          <View style={styles.statusRow}>
+            <View
+              style={[
+                styles.statusDot,
+                backendChecked
+                  ? backendConnected
+                    ? styles.statusConnected
+                    : styles.statusDisconnected
+                  : styles.statusPending,
+              ]}
+            />
+            <Text style={styles.statusText}>
+              {!backendChecked
+                ? "Checking..."
+                : backendConnected
+                ? "Connected"
+                : "Disconnected"}
+            </Text>
+            {isCustomUrl && (
+              <View style={styles.customBadge}>
+                <Text style={styles.customBadgeText}>TUNNEL</Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.currentUrl} numberOfLines={1}>
+            {backendUrl}
           </Text>
         </View>
-        <Text style={styles.name}>{userName || "User"}</Text>
-      </View>
+      </Animated.View>
 
-      <Text style={styles.sectionTitle}>Server Connection</Text>
-      <Text style={styles.hint}>
-        Enter your backend URL or tunnel URL (e.g. ngrok, cloudflared) to
-        connect across different networks.
-      </Text>
-
-      <View style={styles.urlRow}>
-        <TextInput
-          style={styles.urlInput}
-          value={urlInput}
-          onChangeText={setUrlInput}
-          placeholder="https://your-tunnel-url.trycloudflare.com"
-          placeholderTextColor={colors.textPlaceholder}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-        />
-      </View>
-
-      <View style={styles.urlActions}>
-        <TouchableOpacity
-          style={[styles.saveBtn, saving && styles.btnDisabled]}
-          onPress={handleSaveUrl}
-          disabled={saving}
-          accessibilityRole="button"
-          accessibilityLabel="Save server URL"
-        >
-          <Text style={styles.saveBtnText}>
-            {saving ? "Saving..." : "Save"}
-          </Text>
-        </TouchableOpacity>
-
-        {isCustomUrl && (
-          <TouchableOpacity
-            style={styles.resetBtn}
-            onPress={handleReset}
-            accessibilityRole="button"
-            accessibilityLabel="Reset to default URL"
-          >
-            <Text style={styles.resetBtnText}>Reset</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      <View style={styles.statusRow}>
-        <View
-          style={[
-            styles.statusDot,
-            backendChecked
-              ? backendConnected
-                ? styles.statusConnected
-                : styles.statusDisconnected
-              : styles.statusPending,
-          ]}
-        />
-        <Text style={styles.statusText}>
-          {!backendChecked
-            ? "Checking..."
-            : backendConnected
-            ? "Connected"
-            : "Disconnected"}
-        </Text>
-        {isCustomUrl && (
-          <Text style={styles.customBadge}>TUNNEL</Text>
-        )}
-      </View>
-
-      <Text style={styles.currentUrl} numberOfLines={1}>
-        {backendUrl}
-      </Text>
-
+      {/* Sign Out */}
       <TouchableOpacity
         style={styles.logoutBtn}
         onPress={logout}
+        activeOpacity={0.8}
         accessibilityRole="button"
         accessibilityLabel="Sign out"
       >
         <Text style={styles.logoutBtnText}>Sign Out</Text>
       </TouchableOpacity>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -147,57 +198,79 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  content: {
     padding: spacing.xxl,
+    paddingBottom: spacing.xxxxl,
   },
   header: {
     alignItems: "center",
-    marginTop: spacing.xxxl,
+    marginTop: spacing.lg,
     marginBottom: spacing.xxl,
   },
+  avatarContainer: {
+    marginBottom: spacing.lg,
+  },
   avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: colors.primaryDark,
-    borderWidth: 2,
-    borderColor: colors.primary,
+    width: 88,
+    height: 88,
+    borderRadius: 28,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: spacing.md,
+    ...shadows.lg,
   },
   avatarText: {
-    fontSize: 32,
-    fontWeight: "700",
-    color: colors.primary,
+    fontSize: 36,
+    fontWeight: "800",
+    color: "#fff",
   },
   name: {
     fontSize: fontSize.xxxl,
-    fontWeight: "600",
+    fontWeight: "700",
     color: colors.text,
+  },
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.xxl,
+    padding: spacing.xxl,
+    marginBottom: spacing.xxl,
+    ...shadows.md,
   },
   sectionTitle: {
     fontSize: fontSize.xxl,
-    fontWeight: "600",
+    fontWeight: "700",
     color: colors.text,
     marginBottom: spacing.sm,
   },
   hint: {
     fontSize: fontSize.md,
     color: colors.textMuted,
-    marginBottom: spacing.lg,
-    lineHeight: 18,
+    marginBottom: spacing.xl,
+    lineHeight: 20,
   },
-  urlRow: {
-    marginBottom: spacing.md,
-  },
-  urlInput: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
+  inputContainer: {
+    backgroundColor: colors.surfaceLight,
     borderRadius: borderRadius.lg,
     padding: spacing.lg,
+    marginBottom: spacing.lg,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+  },
+  inputFocused: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft + "40",
+  },
+  inputLabel: {
+    fontSize: fontSize.xs,
+    fontWeight: "600",
+    color: colors.textMuted,
+    letterSpacing: 1,
+    marginBottom: spacing.xs,
+  },
+  urlInput: {
     color: colors.text,
-    fontSize: fontSize.lg,
+    fontSize: fontSize.md,
+    padding: 0,
   },
   urlActions: {
     flexDirection: "row",
@@ -206,34 +279,51 @@ const styles = StyleSheet.create({
   },
   saveBtn: {
     flex: 1,
-    backgroundColor: colors.primaryDark,
-    borderWidth: 1,
-    borderColor: colors.primary,
     borderRadius: borderRadius.lg,
-    padding: spacing.md,
+    overflow: "hidden",
+    ...shadows.sm,
+  },
+  saveBtnGradient: {
+    padding: spacing.md + 2,
     alignItems: "center",
+    borderRadius: borderRadius.lg,
   },
   saveBtnText: {
-    color: colors.primary,
+    color: "#fff",
     fontSize: fontSize.lg,
     fontWeight: "600",
   },
   resetBtn: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceLight,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: borderRadius.lg,
     paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.md,
+    paddingVertical: spacing.md + 2,
     alignItems: "center",
   },
   resetBtnText: {
     color: colors.textSecondary,
     fontSize: fontSize.lg,
-    fontWeight: "500",
+    fontWeight: "600",
   },
   btnDisabled: {
     opacity: 0.5,
+  },
+  statusCard: {
+    backgroundColor: colors.surfaceLight,
+    borderRadius: borderRadius.lg,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  statusConnectedCard: {
+    backgroundColor: colors.successSoft,
+    borderColor: colors.success + "40",
+  },
+  statusDisconnectedCard: {
+    backgroundColor: colors.dangerSoft,
+    borderColor: colors.danger + "40",
   },
   statusRow: {
     flexDirection: "row",
@@ -257,36 +347,37 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: fontSize.lg,
+    fontWeight: "600",
     color: colors.textSecondary,
   },
   customBadge: {
     marginLeft: spacing.sm,
-    fontSize: fontSize.xs,
-    fontWeight: "700",
-    color: colors.primary,
-    backgroundColor: colors.primaryDark,
+    backgroundColor: colors.primarySoft,
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
     borderRadius: borderRadius.sm,
-    overflow: "hidden",
+  },
+  customBadgeText: {
+    fontSize: fontSize.xs,
+    fontWeight: "700",
+    color: colors.primary,
   },
   currentUrl: {
     fontSize: fontSize.sm,
     color: colors.textDim,
-    marginBottom: spacing.xxxl,
   },
   logoutBtn: {
-    backgroundColor: colors.dangerDark,
-    borderWidth: 1,
-    borderColor: colors.danger,
+    backgroundColor: colors.dangerSoft,
+    borderWidth: 1.5,
+    borderColor: colors.danger + "30",
     borderRadius: borderRadius.lg,
     padding: spacing.lg,
     alignItems: "center",
-    marginTop: "auto",
+    ...shadows.sm,
   },
   logoutBtnText: {
     color: colors.danger,
     fontSize: fontSize.xl,
-    fontWeight: "600",
+    fontWeight: "700",
   },
 });

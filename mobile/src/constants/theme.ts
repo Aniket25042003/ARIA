@@ -1,40 +1,64 @@
 export const colors = {
-  background: "#0a0a0a",
-  surface: "#111111",
-  surfaceLight: "#1a1a1a",
-  border: "#222222",
-  borderLight: "#333333",
+  // Core backgrounds
+  background: "#F8F9FC",
+  surface: "#FFFFFF",
+  surfaceLight: "#F1F3F8",
+  surfaceSecondary: "#EEF0F6",
+  border: "#E2E5ED",
+  borderLight: "#D1D5E0",
 
-  primary: "#7C3AED",
-  primaryDark: "#1a0a2e",
-  primaryLight: "#a78bfa",
+  // Primary - vibrant purple/indigo
+  primary: "#6C5CE7",
+  primaryDark: "#5A4BD1",
+  primaryLight: "#A29BFE",
+  primarySoft: "#EDE9FF",
+  primaryGlow: "rgba(108, 92, 231, 0.12)",
 
-  success: "#22c55e",
-  successDark: "#0a1a0a",
-  successBorder: "#16a34a",
+  // Secondary accent
+  accent: "#00B894",
+  accentDark: "#00A884",
+  accentLight: "#55EFC4",
+  accentSoft: "#E0FFF5",
 
-  danger: "#dc2626",
-  dangerDark: "#1a0505",
-  dangerLight: "#ef4444",
+  // Status
+  success: "#00B894",
+  successDark: "#009B7D",
+  successBorder: "#00B894",
+  successSoft: "#E0FFF5",
 
-  warning: "#f59e0b",
+  danger: "#E84848",
+  dangerDark: "#D63030",
+  dangerLight: "#FF6B6B",
+  dangerSoft: "#FFF0F0",
 
-  text: "#ffffff",
-  textSecondary: "#aaaaaa",
-  textMuted: "#888888",
-  textDim: "#555555",
-  textPlaceholder: "#444444",
+  warning: "#FDCB6E",
+  warningDark: "#E5A922",
+  warningSoft: "#FFF8E7",
 
-  // Emotion colors
+  // Text
+  text: "#1A1D2E",
+  textSecondary: "#545972",
+  textMuted: "#8B90A5",
+  textDim: "#AEB3C6",
+  textPlaceholder: "#C8CCDA",
+
+  // Shadows
+  shadowColor: "#1A1D2E",
+
+  // Overlays
+  overlay: "rgba(26, 29, 46, 0.5)",
+  overlayLight: "rgba(26, 29, 46, 0.08)",
+
+  // Emotion colors (vibrant for both badges and accents)
   emotion: {
-    neutral: "#888888",
-    happy: "#f59e0b",
-    sad: "#60a5fa",
-    fear: "#ef4444",
-    angry: "#f97316",
-    surprise: "#a78bfa",
-    disgust: "#84cc16",
-    sos: "#dc2626",
+    neutral: "#8B90A5",
+    happy: "#FDCB6E",
+    sad: "#74B9FF",
+    fear: "#E84848",
+    angry: "#E17055",
+    surprise: "#A29BFE",
+    disgust: "#00B894",
+    sos: "#E84848",
   } as Record<string, string>,
 };
 
@@ -46,24 +70,58 @@ export const spacing = {
   xl: 20,
   xxl: 24,
   xxxl: 32,
+  xxxxl: 40,
 };
 
 export const borderRadius = {
   sm: 8,
   md: 12,
-  lg: 14,
-  xl: 16,
-  round: 20,
+  lg: 16,
+  xl: 20,
+  xxl: 24,
+  round: 50,
   full: 9999,
 };
 
 export const fontSize = {
   xs: 11,
   sm: 12,
-  md: 13,
-  lg: 15,
-  xl: 16,
-  xxl: 18,
-  xxxl: 22,
-  display: 52,
+  md: 14,
+  lg: 16,
+  xl: 17,
+  xxl: 20,
+  xxxl: 24,
+  title: 30,
+  display: 48,
+};
+
+export const shadows = {
+  sm: {
+    shadowColor: colors.shadowColor,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  md: {
+    shadowColor: colors.shadowColor,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  lg: {
+    shadowColor: colors.shadowColor,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  glow: (color: string) => ({
+    shadowColor: color,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 6,
+  }),
 };

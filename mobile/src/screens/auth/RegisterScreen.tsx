@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -9,9 +9,11 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Animated,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { useAuthStore } from "../../stores/useAuthStore";
-import { colors, spacing, borderRadius, fontSize } from "../../constants/theme";
+import { colors, spacing, borderRadius, fontSize, shadows } from "../../constants/theme";
 
 export default function RegisterScreen() {
   const register = useAuthStore((s) => s.register);
@@ -19,6 +21,25 @@ export default function RegisterScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [focusedField, setFocusedField] = useState<string | null>(null);
+
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(40)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+      }),
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 500,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
 
   const handleRegister = async () => {
     if (!name.trim() || !email.trim() || !password.trim()) {
@@ -46,61 +67,105 @@ export default function RegisterScreen() {
     }
   };
 
+  const renderInput = (
+    label: string,
+    field: string,
+    value: string,
+    onChangeText: (t: string) => void,
+    placeholder: string,
+    options: {
+      keyboardType?: "email-address" | "default";
+      autoCapitalize?: "none" | "words";
+      secureTextEntry?: boolean;
+    } = {}
+  ) => (
+    <View
+      style={[
+        styles.inputContainer,
+        focusedField === field && styles.inputFocused,
+      ]}
+    >
+      <Text style={styles.inputLabel}>{label}</Text>
+      <TextInput
+        style={styles.input}
+        placeholder={placeholder}
+        placeholderTextColor={colors.textPlaceholder}
+        value={value}
+        onChangeText={onChangeText}
+        onFocus={() => setFocusedField(field)}
+        onBlur={() => setFocusedField(null)}
+        autoCorrect={false}
+        accessibilityLabel={label}
+        {...options}
+      />
+    </View>
+  );
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
-      <View style={styles.inner}>
-        <Text style={styles.title}>Join ARIA</Text>
-        <Text style={styles.subtitle}>Create your account</Text>
+      <Animated.View
+        style={[
+          styles.inner,
+          {
+            opacity: fadeAnim,
+            transform: [{ translateY: slideAnim }],
+          },
+        ]}
+      >
+        <View style={styles.headerSection}>
+          <LinearGradient
+            colors={[colors.primary, colors.primaryLight]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.headerIcon}
+          >
+            <Text style={styles.headerIconText}>+</Text>
+          </LinearGradient>
+          <Text style={styles.title}>Join ARIA</Text>
+          <Text style={styles.subtitle}>Create your account to get started</Text>
+        </View>
 
-        <TextInput
-          style={styles.input}
-          placeholder="Full Name"
-          placeholderTextColor={colors.textPlaceholder}
-          value={name}
-          onChangeText={setName}
-          autoCapitalize="words"
-          accessibilityLabel="Full name"
-        />
-
-        <TextInput
-          style={styles.input}
-          placeholder="Email"
-          placeholderTextColor={colors.textPlaceholder}
-          value={email}
-          onChangeText={setEmail}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          autoCorrect={false}
-          accessibilityLabel="Email address"
-        />
-
-        <TextInput
-          style={styles.input}
-          placeholder="Password (min 6 characters)"
-          placeholderTextColor={colors.textPlaceholder}
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-          accessibilityLabel="Password"
-        />
+        {renderInput("Full Name", "name", name, setName, "John Doe", {
+          autoCapitalize: "words",
+        })}
+        {renderInput("Email", "email", email, setEmail, "your@email.com", {
+          keyboardType: "email-address",
+          autoCapitalize: "none",
+        })}
+        {renderInput(
+          "Password",
+          "password",
+          password,
+          setPassword,
+          "Min 6 characters",
+          { secureTextEntry: true }
+        )}
 
         <TouchableOpacity
           style={styles.registerBtn}
           onPress={handleRegister}
           disabled={loading}
+          activeOpacity={0.8}
           accessibilityRole="button"
           accessibilityLabel="Create account"
         >
-          {loading ? (
-            <ActivityIndicator color={colors.text} />
-          ) : (
-            <Text style={styles.registerBtnText}>Create Account</Text>
-          )}
+          <LinearGradient
+            colors={[colors.primary, colors.primaryDark]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.registerGradient}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.registerBtnText}>Create Account</Text>
+            )}
+          </LinearGradient>
         </TouchableOpacity>
-      </View>
+      </Animated.View>
     </KeyboardAvoidingView>
   );
 }
@@ -115,9 +180,27 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: spacing.xxl,
   },
-  title: {
-    fontSize: 32,
+  headerSection: {
+    alignItems: "center",
+    marginBottom: spacing.xxxl,
+  },
+  headerIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: spacing.lg,
+    ...shadows.md,
+  },
+  headerIconText: {
+    fontSize: 28,
     fontWeight: "700",
+    color: "#fff",
+  },
+  title: {
+    fontSize: fontSize.title,
+    fontWeight: "800",
     color: colors.text,
     textAlign: "center",
   },
@@ -125,29 +208,49 @@ const styles = StyleSheet.create({
     fontSize: fontSize.lg,
     color: colors.textMuted,
     textAlign: "center",
-    marginTop: spacing.sm,
-    marginBottom: spacing.xxxl,
+    marginTop: spacing.xs,
   },
-  input: {
+  inputContainer: {
     backgroundColor: colors.surface,
-    color: colors.text,
-    borderRadius: borderRadius.md,
-    padding: spacing.lg,
-    fontSize: fontSize.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: spacing.md,
-  },
-  registerBtn: {
-    backgroundColor: colors.primary,
     borderRadius: borderRadius.lg,
     padding: spacing.lg,
+    marginBottom: spacing.md,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    ...shadows.sm,
+  },
+  inputFocused: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft + "40",
+  },
+  inputLabel: {
+    fontSize: fontSize.xs,
+    fontWeight: "600",
+    color: colors.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+    marginBottom: spacing.xs,
+  },
+  input: {
+    color: colors.text,
+    fontSize: fontSize.lg,
+    padding: 0,
+  },
+  registerBtn: {
+    borderRadius: borderRadius.lg,
+    overflow: "hidden",
+    marginTop: spacing.lg,
+    ...shadows.md,
+  },
+  registerGradient: {
+    padding: spacing.lg + 2,
     alignItems: "center",
-    marginTop: spacing.sm,
+    borderRadius: borderRadius.lg,
   },
   registerBtnText: {
-    color: colors.text,
+    color: "#fff",
     fontSize: fontSize.xl,
-    fontWeight: "600",
+    fontWeight: "700",
+    letterSpacing: 0.5,
   },
 });

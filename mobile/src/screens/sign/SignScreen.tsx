@@ -5,7 +5,9 @@ import {
   TouchableOpacity,
   StyleSheet,
   Alert,
+  Animated,
 } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useSignStore } from "../../stores/useSignStore";
 import { useSignWebSocket } from "../../hooks/useSignWebSocket";
@@ -15,10 +17,10 @@ import EmotionBadge from "../../components/sign/EmotionBadge";
 import TranscriptFeed from "../../components/sign/TranscriptFeed";
 import SOSButton from "../../components/sign/SOSButton";
 import LanguageSelector from "../../components/sign/LanguageSelector";
-import { colors, spacing, borderRadius, fontSize } from "../../constants/theme";
+import { colors, spacing, borderRadius, fontSize, shadows } from "../../constants/theme";
 import { a11y } from "../../constants/accessibility";
 
-const FRAME_INTERVAL_MS = 200; // 5 fps — higher rate for better stability detection
+const FRAME_INTERVAL_MS = 200;
 
 export default function SignScreen() {
   const [permission, requestPermission] = useCameraPermissions();
@@ -46,19 +48,56 @@ export default function SignScreen() {
     isListening,
   } = useSignWebSocket();
 
+  // Animations
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const cameraScale = useRef(new Animated.Value(0.95)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const listenGlow = useRef(new Animated.Value(0)).current;
+
   useEffect(() => {
     requestPermission();
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 400,
+      useNativeDriver: true,
+    }).start();
   }, []);
+
+  // Listening pulse animation
+  useEffect(() => {
+    if (isListening) {
+      Animated.spring(cameraScale, {
+        toValue: 1,
+        tension: 50,
+        friction: 7,
+        useNativeDriver: true,
+      }).start();
+
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1.05, duration: 1200, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 1200, useNativeDriver: true }),
+        ])
+      ).start();
+
+      Animated.timing(listenGlow, { toValue: 1, duration: 300, useNativeDriver: true }).start();
+    } else {
+      Animated.timing(cameraScale, {
+        toValue: 0.95,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+      pulseAnim.setValue(1);
+      Animated.timing(listenGlow, { toValue: 0, duration: 200, useNativeDriver: true }).start();
+    }
+  }, [isListening]);
 
   const startListening = useCallback(async () => {
     if (!permission?.granted) {
       Alert.alert("Camera permission required for SIGN mode");
       return;
     }
-
     connect();
-
-    // Start capturing and sending frames
     frameIntervalRef.current = setInterval(async () => {
       try {
         if (!cameraRef.current) return;
@@ -71,7 +110,7 @@ export default function SignScreen() {
           sendFrame(photo.base64);
         }
       } catch {
-        // Camera may not be ready yet
+        // Camera may not be ready
       }
     }, FRAME_INTERVAL_MS);
   }, [permission, connect, sendFrame]);
@@ -113,7 +152,6 @@ export default function SignScreen() {
     [setSelectedLanguage, setLanguage]
   );
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
@@ -125,21 +163,37 @@ export default function SignScreen() {
   if (!permission.granted) {
     return (
       <View style={styles.permContainer}>
-        <Text style={styles.permText}>
-          Camera access is needed for SIGN mode to detect your hand signs
-        </Text>
-        <TouchableOpacity style={styles.permBtn} onPress={requestPermission}>
-          <Text style={styles.permBtnText}>Grant Camera Permission</Text>
-        </TouchableOpacity>
+        <View style={styles.permCard}>
+          <Text style={styles.permIcon}>S</Text>
+          <Text style={styles.permTitle}>Camera Access Needed</Text>
+          <Text style={styles.permText}>
+            SIGN mode needs your camera to detect hand signs and facial expressions
+          </Text>
+          <TouchableOpacity style={styles.permBtn} onPress={requestPermission} activeOpacity={0.8}>
+            <LinearGradient
+              colors={[colors.primary, colors.primaryDark]}
+              style={styles.permBtnGradient}
+            >
+              <Text style={styles.permBtnText}>Grant Permission</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
       {/* Camera preview */}
       {isListening && (
-        <View style={styles.cameraContainer}>
+        <Animated.View
+          style={[
+            styles.cameraContainer,
+            {
+              transform: [{ scale: Animated.multiply(cameraScale, pulseAnim) }],
+            },
+          ]}
+        >
           <CameraView
             ref={cameraRef}
             style={styles.camera}
@@ -150,10 +204,10 @@ export default function SignScreen() {
               <Text style={styles.bufferText}>{currentBuffer}</Text>
             </View>
           ) : null}
-          {/* Camera flip button */}
           <TouchableOpacity
             style={styles.flipBtn}
             onPress={toggleCamera}
+            activeOpacity={0.7}
             accessibilityLabel={`Switch to ${facing === "front" ? "back" : "front"} camera`}
             accessibilityRole="button"
           >
@@ -161,7 +215,12 @@ export default function SignScreen() {
               {facing === "front" ? "BACK" : "FRONT"}
             </Text>
           </TouchableOpacity>
-        </View>
+          {/* Live indicator */}
+          <View style={styles.liveIndicator}>
+            <View style={styles.liveDot} />
+            <Text style={styles.liveText}>LIVE</Text>
+          </View>
+        </Animated.View>
       )}
 
       {/* Emotion badge */}
@@ -181,6 +240,7 @@ export default function SignScreen() {
         <TouchableOpacity
           style={[styles.listenBtn, isListening && styles.listenBtnActive]}
           onPress={isListening ? stopListening : startListening}
+          activeOpacity={0.8}
           accessibilityLabel={
             isListening
               ? a11y.sign.stopListening.label
@@ -193,14 +253,24 @@ export default function SignScreen() {
           }
           accessibilityRole="button"
         >
-          <Text style={styles.listenBtnText}>
-            {isListening ? "Stop Listening" : "Start Listening"}
-          </Text>
+          {isListening ? (
+            <View style={styles.listenBtnInner}>
+              <View style={styles.stopIcon} />
+              <Text style={styles.listenBtnTextActive}>Stop</Text>
+            </View>
+          ) : (
+            <LinearGradient
+              colors={[colors.primary, colors.primaryDark]}
+              style={styles.listenBtnGradient}
+            >
+              <Text style={styles.listenBtnText}>Start Listening</Text>
+            </LinearGradient>
+          )}
         </TouchableOpacity>
 
         <SOSButton onPress={handleSOS} active={sosActive} />
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -217,30 +287,56 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: spacing.xxl,
   },
-  permText: {
+  permCard: {
+    backgroundColor: colors.surface,
+    borderRadius: borderRadius.xxl,
+    padding: spacing.xxxl,
+    alignItems: "center",
+    width: "100%",
+    ...shadows.lg,
+  },
+  permIcon: {
+    fontSize: 40,
+    fontWeight: "800",
+    color: colors.primary,
+    marginBottom: spacing.lg,
+  },
+  permTitle: {
+    fontSize: fontSize.xxl,
+    fontWeight: "700",
     color: colors.text,
+    marginBottom: spacing.sm,
+  },
+  permText: {
+    color: colors.textSecondary,
     textAlign: "center",
-    marginBottom: spacing.xl,
-    fontSize: fontSize.xl,
-    lineHeight: 24,
+    marginBottom: spacing.xxl,
+    fontSize: fontSize.md,
+    lineHeight: 22,
   },
   permBtn: {
-    backgroundColor: colors.primary,
-    borderRadius: borderRadius.md,
+    borderRadius: borderRadius.lg,
+    overflow: "hidden",
+    width: "100%",
+    ...shadows.md,
+  },
+  permBtnGradient: {
     padding: spacing.lg,
-    paddingHorizontal: spacing.xxxl,
+    alignItems: "center",
+    borderRadius: borderRadius.lg,
   },
   permBtnText: {
-    color: colors.text,
-    fontWeight: "600",
+    color: "#fff",
+    fontWeight: "700",
     fontSize: fontSize.xl,
   },
   cameraContainer: {
-    height: 200,
-    borderRadius: borderRadius.md,
+    height: 220,
+    borderRadius: borderRadius.xl,
     overflow: "hidden",
     marginBottom: spacing.md,
     position: "relative",
+    ...shadows.lg,
   },
   camera: {
     flex: 1,
@@ -250,31 +346,54 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: "rgba(0,0,0,0.7)",
-    padding: spacing.sm,
+    backgroundColor: "rgba(255,255,255,0.92)",
+    padding: spacing.sm + 2,
   },
   bufferText: {
     color: colors.primary,
     fontSize: fontSize.xxl,
-    fontWeight: "700",
+    fontWeight: "800",
     textAlign: "center",
-    letterSpacing: 2,
+    letterSpacing: 3,
   },
   flipBtn: {
     position: "absolute",
     top: spacing.sm,
     right: spacing.sm,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: "rgba(255,255,255,0.9)",
     borderRadius: borderRadius.round,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs + 2,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.3)",
+    ...shadows.sm,
   },
   flipBtnText: {
     color: colors.text,
     fontSize: fontSize.xs,
     fontWeight: "700",
+    letterSpacing: 1,
+  },
+  liveIndicator: {
+    position: "absolute",
+    top: spacing.sm,
+    left: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(232, 72, 72, 0.9)",
+    borderRadius: borderRadius.round,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.xs,
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#fff",
+    marginRight: spacing.xs,
+  },
+  liveText: {
+    color: "#fff",
+    fontSize: fontSize.xs - 1,
+    fontWeight: "800",
     letterSpacing: 1,
   },
   controls: {
@@ -283,19 +402,42 @@ const styles = StyleSheet.create({
   },
   listenBtn: {
     flex: 1,
-    backgroundColor: colors.primaryDark,
-    borderWidth: 1,
-    borderColor: colors.primary,
     borderRadius: borderRadius.lg,
-    padding: spacing.lg,
-    alignItems: "center",
+    overflow: "hidden",
   },
   listenBtnActive: {
-    backgroundColor: colors.primary,
+    backgroundColor: colors.surface,
+    borderWidth: 2,
+    borderColor: colors.danger,
+    borderRadius: borderRadius.lg,
+  },
+  listenBtnInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: spacing.lg,
+    gap: spacing.sm,
+  },
+  stopIcon: {
+    width: 16,
+    height: 16,
+    borderRadius: 3,
+    backgroundColor: colors.danger,
+  },
+  listenBtnGradient: {
+    padding: spacing.lg,
+    alignItems: "center",
+    borderRadius: borderRadius.lg,
+    ...shadows.md,
   },
   listenBtnText: {
-    color: colors.text,
+    color: "#fff",
     fontSize: fontSize.xl,
-    fontWeight: "600",
+    fontWeight: "700",
+  },
+  listenBtnTextActive: {
+    color: colors.danger,
+    fontSize: fontSize.xl,
+    fontWeight: "700",
   },
 });
