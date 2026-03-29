@@ -1,9 +1,11 @@
 import asyncio
 import base64
+import io
 import json
 import time
 
 import boto3
+from PIL import Image
 
 from app.config import settings
 from app.services.vision.base import SignRecognitionResult, VisionProvider, VisionResult
@@ -110,18 +112,34 @@ class BedrockProvider(VisionProvider):
         """Build a Converse API message with text only."""
         return [{"role": "user", "content": [{"text": prompt}]}]
 
-    def _make_multi_image_message(self, images_b64: list[str], prompt: str) -> list:
-        """Build a Converse API message with multiple images + text."""
-        content = []
-        for img_b64 in images_b64:
-            content.append({
-                "image": {
-                    "format": "jpeg",
-                    "source": {"bytes": base64.b64decode(img_b64)},
-                }
-            })
-        content.append({"text": prompt})
-        return [{"role": "user", "content": content}]
+    @staticmethod
+    def _stitch_frames(frames_b64: list[str], cols: int = 4) -> bytes:
+        """Stitch multiple frames into a single grid image. Returns JPEG bytes."""
+        images = []
+        for b64 in frames_b64:
+            img = Image.open(io.BytesIO(base64.b64decode(b64)))
+            images.append(img)
+
+        if not images:
+            raise ValueError("No valid frames to stitch")
+
+        # Resize all to same dimensions (use first frame as reference)
+        w, h = images[0].size
+        # Scale down for faster processing — 320px wide per cell is enough
+        if w > 320:
+            scale = 320 / w
+            w, h = 320, int(h * scale)
+            images = [img.resize((w, h), Image.LANCZOS) for img in images]
+
+        rows = (len(images) + cols - 1) // cols
+        grid = Image.new("RGB", (w * cols, h * rows), (0, 0, 0))
+        for i, img in enumerate(images):
+            r, c = divmod(i, cols)
+            grid.paste(img, (c * w, r * h))
+
+        buf = io.BytesIO()
+        grid.save(buf, format="JPEG", quality=80)
+        return buf.getvalue()
 
     async def detect_obstacle(self, image_b64: str) -> VisionResult:
         start = time.monotonic()
@@ -166,9 +184,24 @@ class BedrockProvider(VisionProvider):
         return VisionResult(text=raw, provider=self.name, latency_ms=latency)
 
     async def describe_sign_sequence(self, frames_b64: list[str]) -> VisionResult:
-        """Send multiple frames to Bedrock vision → get signs + emotion description."""
+        """Stitch frames into grid → send single image to Bedrock vision."""
         start = time.monotonic()
-        messages = self._make_multi_image_message(frames_b64, SEQUENCE_ANALYSIS_PROMPT)
+
+        # Stitch frames into a single composite grid image
+        grid_bytes = await asyncio.to_thread(self._stitch_frames, frames_b64)
+
+        messages = [{
+            "role": "user",
+            "content": [
+                {
+                    "image": {
+                        "format": "jpeg",
+                        "source": {"bytes": grid_bytes},
+                    }
+                },
+                {"text": SEQUENCE_ANALYSIS_PROMPT},
+            ],
+        }]
         raw = await asyncio.to_thread(
             self._converse_sync, messages, max_tokens=150, temperature=0.2
         )
