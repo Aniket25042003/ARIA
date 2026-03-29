@@ -5,7 +5,10 @@ export async function triggerSOS(location?: {
   latitude: number;
   longitude: number;
 }): Promise<SpeakResponse> {
-  const response = await api.post<SpeakResponse>("/sign/sos", location ?? {});
+  const payload = location
+    ? { location: { lat: location.latitude, lng: location.longitude } }
+    : {};
+  const response = await api.post<SpeakResponse>("/sign/sos", payload);
   return response.data;
 }
 

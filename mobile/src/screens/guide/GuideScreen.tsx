@@ -83,7 +83,7 @@ export default function GuideScreen() {
       // Speak first instruction
       const firstStep = data.steps[0];
       try {
-        const res = await manualSpeak(firstStep.instruction, "guide");
+        const res = await manualSpeak(firstStep.instruction, "neutral");
         await playAudioFromUrl(res.audio_url);
       } catch {
         // TTS failed, but navigation still works

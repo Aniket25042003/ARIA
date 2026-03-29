@@ -20,6 +20,7 @@ type HomeNav = BottomTabNavigationProp<MainTabParamList, "Home">;
 export default function HomeScreen() {
   const navigation = useNavigation<HomeNav>();
   const backendConnected = useConnectionStore((s) => s.backendConnected);
+  const backendChecked = useConnectionStore((s) => s.backendChecked);
   const userName = useAuthStore((s) => s.userName);
 
   useBackendHealth();
@@ -35,7 +36,7 @@ export default function HomeScreen() {
       )}
 
       <View style={styles.statusRow}>
-        {backendConnected === null ? (
+        {!backendChecked ? (
           <ActivityIndicator color={colors.primary} />
         ) : (
           <Text
