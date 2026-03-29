@@ -35,9 +35,9 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
     user_id_str = str(user.id)
 
-    # Create MongoDB profile and default preferences
-    await create_user_profile(user_id_str, req.name)
-    await create_user_preferences(user_id_str)
+    # Create profile and default preferences in the same session
+    await create_user_profile(user_id_str, req.name, session=db)
+    await create_user_preferences(user_id_str, session=db)
 
     token = create_access_token(user_id_str)
 

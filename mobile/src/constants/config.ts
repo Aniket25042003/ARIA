@@ -1,7 +1,7 @@
 // Backend URL — update this to your Jetson Nano's IP address
 // On the Jetson, run `hostname -I` to find the IP
 export const BACKEND_URL =
-  process.env.EXPO_PUBLIC_BACKEND_URL || "http://192.168.55.1:8000";
+  process.env.EXPO_PUBLIC_BACKEND_URL || "http://10.7.112.227:8000";
 
 export const WS_URL = BACKEND_URL.replace("http", "ws");
 

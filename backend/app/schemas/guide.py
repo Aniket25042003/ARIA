@@ -9,6 +9,8 @@ class ObstacleResponse(BaseModel):
     warning: str
     severity: str  # "clear", "caution", "danger"
     audio_url: str
+    provider: str = ""
+    latency_ms: int = 0
 
 
 class NavigationRequest(BaseModel):

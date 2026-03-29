@@ -5,7 +5,7 @@ A universal accessibility app with two modes:
 - **SIGN Mode** — For deaf/mute users: ASL hand sign recognition + facial emotion detection → natural sentence → emotion-matched voice output via ElevenLabs
 - **GUIDE Mode** — For blind users: camera-based obstacle detection + turn-by-turn walking navigation with voice guidance
 
-React Native (Expo) mobile app connected to a FastAPI backend running on a Jetson Orin Nano Super. All AI processing runs on the Jetson. Databases (PostgreSQL + MongoDB + Redis) are self-hosted — no third-party data storage.
+React Native (Expo) mobile app connected to a FastAPI backend running on a Jetson Orin Nano Super. All AI processing runs on the Jetson. Data stored in a single SQLite file — no external databases required.
 
 ---
 
@@ -14,9 +14,9 @@ React Native (Expo) mobile app connected to a FastAPI backend running on a Jetso
 1. [Prerequisites](#1-prerequisites)
 2. [Get Your API Keys](#2-get-your-api-keys)
 3. [Backend Setup (Jetson)](#3-backend-setup-jetson)
-4. [Run Database Migrations](#4-run-database-migrations)
-5. [Verify Backend Services](#5-verify-backend-services)
-6. [Mobile App Setup](#6-mobile-app-setup)
+4. [Verify Backend](#4-verify-backend)
+5. [Mobile App Setup](#5-mobile-app-setup)
+6. [Cross-Network Setup (Tunnel)](#6-cross-network-setup-tunnel)
 7. [Test: Registration & Login](#7-test-registration--login)
 8. [Test: SIGN Mode](#8-test-sign-mode)
 9. [Test: GUIDE Mode — Obstacle Detection](#9-test-guide-mode--obstacle-detection)
@@ -35,20 +35,24 @@ React Native (Expo) mobile app connected to a FastAPI backend running on a Jetso
 
 **On the Jetson Orin Nano Super:**
 - Ubuntu 22.04, CUDA 12.6
-- Docker 29.3+ and Docker Compose v5+
-- At least 4GB free RAM, 10GB free disk
-- Network accessible from your phone (same WiFi or USB network)
+- Python 3.10+
+- System libraries: `libgl1-mesa-glx`, `libglib2.0-0` (for OpenCV/MediaPipe)
+- At least 4GB free RAM, 5GB free disk
 
 **On your development machine (laptop/desktop):**
 - Node.js 18+ and npm
 - **Expo Go** app installed on your phone (iOS App Store / Google Play Store)
-- Phone and Jetson on the same network
 
-**Verify Docker on Jetson:**
+**Verify Python on Jetson:**
 ```bash
 ssh jetson
-docker --version        # Should be 29.3+
-docker compose version  # Should be v5+
+python3 --version   # Should be 3.10+
+pip3 --version
+```
+
+If you need the system libraries:
+```bash
+sudo apt update && sudo apt install -y libgl1-mesa-glx libglib2.0-0
 ```
 
 ---
@@ -75,13 +79,20 @@ You need **at least one** vision API key. Get as many as you can for fallback re
 ssh jetson
 cd ~
 git clone <your-repo-url> ARIA
-cd ARIA
+cd ARIA/backend
 ```
 
-### 3.2 — Create the environment file
+### 3.2 — Create a virtual environment and install dependencies
 
 ```bash
-cd docker
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 3.3 — Create the environment file
+
+```bash
 cp .env.example .env
 nano .env
 ```
@@ -89,10 +100,6 @@ nano .env
 Fill in your actual values:
 
 ```env
-# Database passwords (pick anything, these are local-only)
-POSTGRES_PASSWORD=ariapass
-MONGO_PASSWORD=ariapass
-
 # API Keys — paste your real keys here
 GEMINI_API_KEY=AIza...
 OPENAI_API_KEY=sk-...
@@ -112,69 +119,35 @@ DEBUG=false
 
 Save and exit (`Ctrl+X`, `Y`, `Enter` in nano).
 
-### 3.3 — Build and start all services
+### 3.4 — Start the backend
 
 ```bash
-cd ~/ARIA/docker
-docker compose up --build -d
+bash run.sh
 ```
 
-This starts 5 services:
-- **nginx** on port 80 (reverse proxy)
-- **api** on port 8000 (FastAPI backend)
-- **postgres** on port 5432
-- **mongo** on port 27017
-- **redis** on port 6379
-
-First build takes 5-10 minutes (downloads base images, installs Python packages, etc.).
-
-### 3.4 — Watch the logs until everything is healthy
-
+Or manually:
 ```bash
-docker compose logs -f
+source venv/bin/activate
+mkdir -p audio_output
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Wait until you see:
 ```
-api-1  | INFO  aria_backend_ready
+INFO  aria_backend_ready
 ```
 
-Then press `Ctrl+C` to stop following logs.
-
-### 3.5 — Verify all containers are running
-
-```bash
-docker compose ps
-```
-
-All 5 services should show `Up` or `healthy`. If any show `Restarting` or `Exit`, check the troubleshooting section.
+The database (SQLite) is created automatically on first startup — no migrations needed.
 
 ---
 
-## 4. Run Database Migrations
+## 4. Verify Backend
 
-This creates the PostgreSQL tables (users, transcripts, navigation logs, etc.):
-
-```bash
-docker compose exec api alembic upgrade head
-```
-
-Expected output:
-```
-INFO  [alembic.runtime.migration] Running upgrade  -> xxxx, Initial tables
-```
-
-If you see `No module named 'app'`, make sure you're running the command from the `docker/` directory and the api container is running.
-
----
-
-## 5. Verify Backend Services
-
-### 5.1 — Basic health check
+### 4.1 — Basic health check
 
 ```bash
 # From the Jetson itself:
-curl http://localhost/health
+curl http://localhost:8000/health
 ```
 
 Expected response:
@@ -182,31 +155,28 @@ Expected response:
 {"status": "ok", "version": "1.0.0", "uptime_seconds": 42.5}
 ```
 
-### 5.2 — Detailed service health
+### 4.2 — Detailed service health
 
 ```bash
-curl http://localhost/health/services
+curl http://localhost:8000/health/services
 ```
 
-Expected response (all should be `true`):
+Expected response:
 ```json
 {
-  "postgres": true,
-  "mongo": true,
-  "redis": true,
+  "database": "ok",
   "vision_providers": {
     "gemini": true,
     "openai": true,
     "claude": true,
     "local": false
-  },
-  "gpu_available": true
+  }
 }
 ```
 
 `local: false` is normal if YOLOv8 weights haven't been downloaded yet. The cloud providers are what matter.
 
-### 5.3 — Check from your laptop
+### 4.3 — Check from your laptop
 
 Find the Jetson's IP:
 ```bash
@@ -215,18 +185,16 @@ hostname -I
 # Example output: 192.168.55.1 ...
 ```
 
-From your laptop:
+From your laptop (must be on the same network):
 ```bash
-curl http://192.168.55.1/health
+curl http://192.168.55.1:8000/health
 ```
-
-If this works, your phone can reach the backend too.
 
 ---
 
-## 6. Mobile App Setup
+## 5. Mobile App Setup
 
-### 6.1 — Install dependencies
+### 5.1 — Install dependencies
 
 On your **development machine** (not the Jetson):
 
@@ -235,19 +203,23 @@ cd ARIA/mobile
 npm install
 ```
 
-### 6.2 — Configure backend URL
+### 5.2 — Configure backend URL
 
-Edit `mobile/src/constants/config.ts`:
+The app defaults to `http://192.168.55.1:8000`. You can change the URL in two ways:
 
-```typescript
-export const BACKEND_URL = "http://192.168.55.1";  // <-- Your Jetson's IP
-export const WS_URL = "ws://192.168.55.1";          // <-- Same IP, ws:// protocol
+**Option A — In-app (recommended):** Go to the **Profile** tab in the app and enter the Jetson's IP or tunnel URL in the Server URL field. This persists across app restarts.
+
+**Option B — Environment variable:** Set before starting Expo:
+```bash
+EXPO_PUBLIC_BACKEND_URL=http://<jetson-ip>:8000 npx expo start
 ```
 
-If you're using USB networking (default Jetson setup), the IP is `192.168.55.1`.
-If you're on WiFi, use whatever `hostname -I` showed.
+**Option C — Edit config file:** Edit `mobile/src/constants/config.ts`:
+```typescript
+export const BACKEND_URL = "http://<jetson-ip>:8000";
+```
 
-### 6.3 — Start the Expo dev server
+### 5.3 — Start the Expo dev server
 
 ```bash
 npx expo start
@@ -255,13 +227,55 @@ npx expo start
 
 You'll see a QR code in the terminal.
 
-### 6.4 — Open on your phone
+### 5.4 — Open on your phone
 
 1. Open **Expo Go** on your phone
 2. Scan the QR code
 3. The app should load and show the ARIA login screen
 
 If the QR code doesn't scan, try pressing `s` in the terminal to switch to Expo Go mode, then scan again.
+
+---
+
+## 6. Cross-Network Setup (Tunnel)
+
+If your Jetson and phone are on **different networks** (e.g., Jetson on eduroam, phone on mobile data), you need a tunnel to give the backend a public URL.
+
+### Option A — Cloudflare Tunnel (free, no account needed)
+
+On the Jetson:
+```bash
+# Install cloudflared (one time)
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 -o cloudflared
+chmod +x cloudflared
+sudo mv cloudflared /usr/local/bin/
+
+# Start the tunnel (run alongside the backend)
+cloudflared tunnel --url http://localhost:8000
+```
+
+Cloudflared will print a public URL like:
+```
+https://random-words.trycloudflare.com
+```
+
+### Option B — ngrok
+
+```bash
+# Install ngrok and authenticate (one time)
+# Then:
+ngrok http 8000
+```
+
+### Use the tunnel URL on your phone
+
+1. Open the ARIA app on your phone
+2. Go to the **Profile** tab
+3. Paste the tunnel URL (e.g. `https://random-words.trycloudflare.com`) into the **Server URL** field
+4. Tap **Save**
+5. The status dot should turn green — you're connected
+
+This works from **any network** — mobile data, different WiFi, hotspot, etc.
 
 ---
 
@@ -285,14 +299,13 @@ You should see:
 - Two mode cards: **SIGN** and **GUIDE**
 
 If you see a red "Backend offline" indicator, double-check:
-- The Jetson IP in `config.ts` is correct
-- Your phone is on the same network as the Jetson
-- The backend is running (`docker compose ps` on Jetson)
+- The Jetson IP or tunnel URL is correct (Profile tab → Server URL)
+- The backend is running on the Jetson
 
 ### Step 3 — Test logout and login
 
 1. Go to the **Profile** tab (bottom navigation)
-2. Tap **Logout**
+2. Tap **Sign Out**
 3. You should be back at the login screen
 4. Log in with the credentials you just registered
 5. You should be back on the Home screen
@@ -301,12 +314,12 @@ If you see a red "Backend offline" indicator, double-check:
 
 ```bash
 # Register
-curl -X POST http://192.168.55.1/auth/register \
+curl -X POST http://<jetson-ip>:8000/auth/register \
   -H "Content-Type: application/json" \
   -d '{"email":"curl@test.com","password":"test123","name":"Curl User"}'
 
 # Login
-curl -X POST http://192.168.55.1/auth/login \
+curl -X POST http://<jetson-ip>:8000/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"curl@test.com","password":"test123"}'
 
@@ -340,13 +353,6 @@ export TOKEN="eyJhbGci..."  # paste the token from the login response
    - Plays the audio through your phone speaker
 7. The sentence appears in the **transcript feed** with an emotion badge
 
-### What to expect:
-
-- Letters appear in the buffer as you sign
-- Emotion badge updates (NEUTRAL, HAPPY, SAD, FEAR, etc.)
-- After sentence formation: audio plays automatically
-- Transcript feed scrolls down with each new sentence
-
 ### Language selector:
 
 - Tap **EN**, **ES**, or **FR** to change language
@@ -356,16 +362,12 @@ export TOKEN="eyJhbGci..."  # paste the token from the login response
 
 ```bash
 # Manual speak — tests TTS without camera
-curl -X POST http://192.168.55.1/sign/speak \
+curl -X POST http://<jetson-ip>:8000/sign/speak \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"text":"Hello, I need help","emotion":"fear"}'
 
 # Response: {"sentence":"Hello, I need help","audio_url":"/audio/xxx.mp3"}
-
-# Play the audio:
-curl -O http://192.168.55.1/audio/xxx.mp3  # replace xxx with actual filename
-# Open the MP3 file to hear it
 ```
 
 ---
@@ -383,29 +385,18 @@ curl -O http://192.168.55.1/audio/xxx.mp3  # replace xxx with actual filename
    - A wall → "Wall directly ahead"
    - Open hallway → "Path is clear"
 6. Audio warnings play automatically through the speaker
-7. The warning banner at the top shows the latest detection
-8. Severity levels trigger different haptic feedback:
+7. Severity levels trigger different haptic feedback:
    - **clear** — no haptic
    - **caution** — light vibration
    - **danger** — heavy vibration
-9. Tap **Stop Scanning** to pause
-
-### What to expect:
-
-- A new scan happens every 1.5 seconds
-- Each scan takes 1-3 seconds (depends on which vision API responds)
-- The red scanning indicator shows when active
-- Audio plays for each scan result
+8. Tap **Stop Scanning** to pause
 
 ### Test via API (optional):
 
-You can test with a base64-encoded image:
-
 ```bash
-# Encode a test image
 BASE64_IMG=$(base64 -w0 /path/to/test-image.jpg)
 
-curl -X POST http://192.168.55.1/guide/obstacle \
+curl -X POST http://<jetson-ip>:8000/guide/obstacle \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d "{\"frame\":\"$BASE64_IMG\"}"
@@ -422,7 +413,6 @@ curl -X POST http://192.168.55.1/guide/obstacle \
 1. While in GUIDE mode, type a destination in the text input at the bottom
    - Example: "Kent State University Library"
    - Example: "Starbucks"
-   - Example: "123 Main Street, Kent, OH"
 2. Tap **Go**
 3. The app will:
    - Get your current GPS location
@@ -430,34 +420,15 @@ curl -X POST http://192.168.55.1/guide/obstacle \
    - Display the first step in a green card
    - Speak the first instruction aloud
 4. As you walk, location updates are sent via WebSocket
-5. When you get close to a waypoint, the next step is automatically spoken
-6. When you arrive, you'll hear "You have arrived at your destination"
-
-### What to expect:
-
-- Step card shows: "Step 1 of 5 — Head north on Main St for 200m"
-- Audio plays for each new step
-- Navigation and obstacle scanning work simultaneously
+5. When you arrive, you'll hear "You have arrived at your destination"
 
 ### Test via API (optional):
 
 ```bash
-# Get walking directions (use real coordinates near you)
-curl -X POST http://192.168.55.1/guide/navigate \
+curl -X POST http://<jetson-ip>:8000/guide/navigate \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"lat":41.1499,"lng":-81.3415,"destination":"Kent State Library"}'
-
-# Response:
-# {
-#   "route_id": "nav_abc123",
-#   "steps": [
-#     {"instruction":"Head north on S Lincoln St","distance":"0.2 mi","duration":"4 mins",...},
-#     ...
-#   ],
-#   "total_distance": "0.8 mi",
-#   "total_duration": "16 mins"
-# }
 ```
 
 ---
@@ -476,12 +447,10 @@ curl -X POST http://192.168.55.1/guide/navigate \
 ### Test via API (optional):
 
 ```bash
-curl -X POST http://192.168.55.1/sign/sos \
+curl -X POST http://<jetson-ip>:8000/sign/sos \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"location":{"lat":41.1499,"lng":-81.3415}}'
-
-# Response: {"sentence":"EMERGENCY...","audio_url":"/audio/zzz.mp3"}
 ```
 
 ---
@@ -491,29 +460,22 @@ curl -X POST http://192.168.55.1/sign/sos \
 ### From the mobile app:
 
 1. Go to the **Profile** tab
-2. You should see your name and email
-3. Tap to edit your name
-4. Changes save automatically
+2. You should see your name, connection status, and server URL
+3. Use the Server URL field to change your backend URL
 
 ### Test via API:
 
 ```bash
 # Get profile
-curl http://192.168.55.1/user/profile \
+curl http://<jetson-ip>:8000/user/profile \
   -H "Authorization: Bearer $TOKEN"
 
-# Update profile
-curl -X PATCH http://192.168.55.1/user/profile \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"name":"New Name"}'
-
 # Get preferences
-curl http://192.168.55.1/user/preferences \
+curl http://<jetson-ip>:8000/user/preferences \
   -H "Authorization: Bearer $TOKEN"
 
 # Update preferences
-curl -X PATCH http://192.168.55.1/user/preferences \
+curl -X PATCH http://<jetson-ip>:8000/user/preferences \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"default_mode":"guide","obstacle_scan_interval_ms":2000}'
@@ -523,53 +485,35 @@ curl -X PATCH http://192.168.55.1/user/preferences \
 
 ## 13. Run Backend Unit Tests
 
-### On the Jetson (inside the API container):
+On the Jetson:
 
 ```bash
-cd ~/ARIA/docker
-
-# Run all tests
-docker compose exec api python -m pytest tests/ -v
-
-# Run specific test files
-docker compose exec api python -m pytest tests/test_asl_classifier.py -v
-docker compose exec api python -m pytest tests/test_vision_fallback.py -v
-docker compose exec api python -m pytest tests/test_auth.py -v
-docker compose exec api python -m pytest tests/test_sign.py -v
-docker compose exec api python -m pytest tests/test_guide.py -v
+cd ~/ARIA/backend
+source venv/bin/activate
+python -m pytest tests/ -v
 ```
 
-### Test descriptions:
-
-| File | Tests | What it covers |
-|---|---|---|
-| `test_asl_classifier.py` | 11 tests | ASL letter recognition (A, D, E, F, I, K, L, W, Y), edge cases |
-| `test_vision_fallback.py` | 7 tests | Vision provider interface, mock providers, health checks |
-| `test_auth.py` | 7 tests | Registration validation, login failures, auth protection |
-| `test_sign.py` | 4 tests | SIGN endpoint auth requirements, payload validation |
-| `test_guide.py` | 5 tests | GUIDE endpoint auth requirements, payload validation |
+Run specific test files:
+```bash
+python -m pytest tests/test_asl_classifier.py -v
+python -m pytest tests/test_auth.py -v
+python -m pytest tests/test_sign.py -v
+python -m pytest tests/test_guide.py -v
+```
 
 ---
 
 ## 14. Development Mode (Hot Reload)
 
-For active development with live code reloading:
-
 ```bash
-cd ~/ARIA/docker
-
-# Start with dev overrides
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+cd ~/ARIA/backend
+source venv/bin/activate
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 This gives you:
 - **Backend hot reload** — edit Python files, uvicorn auto-restarts
-- **Exposed database ports** — connect with any DB client:
-  - PostgreSQL: `localhost:5432` (user: `aria`, db: `aria`)
-  - MongoDB: `localhost:27017` (user: `aria`)
-  - Redis: `localhost:6379`
-- **Debug logging** enabled
-- **No GPU requirement** — works on machines without NVIDIA GPU
+- **Debug logging** — set `DEBUG=true` in `.env`
 
 For the mobile app, `npx expo start` already hot-reloads on file save.
 
@@ -606,28 +550,29 @@ Interactive API docs available at: `http://<jetson-ip>:8000/docs`
 ## 16. Architecture
 
 ```
-Phone (Expo)                          Jetson Orin Nano (Docker Compose)
-┌──────────────┐                     ┌─────────────────────────────────────┐
-│  SIGN Screen │──WebSocket──────────│─► Nginx (:80) ──► FastAPI (:8000)  │
-│  (phone cam) │   frames @ 10fps   │      │               │              │
-│              │                     │      │    ┌──────────┼──────────┐   │
-│  GUIDE Screen│──REST + WS─────────│──────┘    │          │          │   │
-│  (phone cam) │   obstacle frames  │           ▼          ▼          ▼   │
-│              │   location updates  │     PostgreSQL   MongoDB    Redis   │
-│  Profile     │──REST──────────────│──────►    │                         │
-└──────────────┘                     │     Vision APIs (fallback chain):  │
-                                     │     Gemini → OpenAI → Claude →     │
-                                     │     YOLOv8 local (GPU)             │
-                                     │                                     │
-                                     │     ElevenLabs TTS (emotion voice) │
-                                     │     Google Maps (walking nav)      │
-                                     └─────────────────────────────────────┘
+Phone (Expo)                          Jetson Orin Nano
+┌──────────────┐                     ┌───────────────────────────────────┐
+│  SIGN Screen │──WebSocket──────────│──► FastAPI + Uvicorn (:8000)     │
+│  (phone cam) │   frames @ 10fps   │       │                           │
+│              │                     │       ├── SQLite (aria.db)        │
+│  GUIDE Screen│──REST + WS─────────│───────┤   users, transcripts,     │
+│  (phone cam) │   obstacle frames  │       │   navigation, preferences │
+│              │   location updates  │       │                           │
+│  Profile     │──REST──────────────│───────┤── In-memory sessions      │
+│  (server URL)│                     │       │   (sign mode buffers)     │
+└──────────────┘                     │       │                           │
+                                     │  Vision APIs (fallback chain):   │
+        ┌── Tunnel (optional) ──┐    │  Gemini → OpenAI → Claude →      │
+        │  cloudflared / ngrok  │    │  YOLOv8 local (GPU)              │
+        │  for cross-network    │    │                                   │
+        └───────────────────────┘    │  ElevenLabs TTS (emotion voice)  │
+                                     │  Google Maps (walking nav)        │
+                                     └───────────────────────────────────┘
 ```
 
-**Database split:**
-- **PostgreSQL** — users, auth, transcripts, navigation logs, SOS events, API usage tracking
-- **MongoDB** — user profiles, user preferences (flexible documents)
-- **Redis** — per-user sign session state (letter buffers, current emotion)
+**Data storage:**
+- **SQLite** (`aria.db`) — users, auth, transcripts, navigation logs, SOS events, API usage, user profiles, user preferences
+- **In-memory** — per-user sign session state (letter buffers, current emotion) — ephemeral, cleared on restart
 
 **Vision fallback chain:**
 1. Gemini 1.5 Flash (fastest, free tier)
@@ -641,46 +586,40 @@ Phone (Expo)                          Jetson Orin Nano (Docker Compose)
 
 | Problem | Diagnosis | Fix |
 |---|---|---|
-| `docker compose up` fails | Check `docker compose logs api` | Usually a missing env var — verify `.env` file |
-| "Backend offline" on phone | Run `curl http://<ip>/health` from phone's network | Check Jetson IP, ensure same network, check firewall |
-| Health check shows postgres `false` | `docker compose logs postgres` | Wait for postgres to initialize (30s), or check password in `.env` |
-| `alembic upgrade` fails | `docker compose exec api alembic current` | Make sure postgres is healthy first |
-| Registration returns 500 | `docker compose logs api` | Usually a DB connection issue — check DATABASE_URL |
-| No audio plays | Check ElevenLabs key is set | Verify key in `.env`, check ElevenLabs quota at elevenlabs.io |
-| Vision returns errors | `docker compose logs api \| grep vision` | Check the relevant API key; system auto-falls back to next provider |
+| Backend won't start | Check terminal output for errors | Missing env var or dependency — check `.env` and `pip install -r requirements.txt` |
+| "Backend offline" on phone | `curl http://<ip>:8000/health` | Check Jetson IP, ensure same network or use tunnel (Section 6) |
+| Can't connect from different WiFi | Devices on different networks | Use cloudflared or ngrok tunnel (Section 6) |
+| Registration returns 500 | Check terminal logs | Usually a DB issue — delete `aria.db` and restart |
+| No audio plays | Check ElevenLabs key is set | Verify key in `.env`, check ElevenLabs quota |
+| Vision returns errors | Check terminal logs for `vision_call` | Check the relevant API key; system auto-falls back to next provider |
 | Camera not working on phone | Expo Go needs camera permission | Go to phone Settings → Expo Go → Camera → Allow |
 | Location not working | Expo Go needs location permission | Go to phone Settings → Expo Go → Location → While Using |
 | Navigation returns empty steps | Check Google Maps API key | Ensure Directions API is enabled in Google Cloud Console |
-| WebSocket won't connect | Check nginx config | Ensure `/ws/` paths are proxied with upgrade headers |
-| GPU not detected | `docker compose exec api nvidia-smi` | Install NVIDIA Container Toolkit on Jetson |
-| Tests fail with import errors | `docker compose exec api pip list` | Run tests inside the container, not on host |
-| Slow obstacle detection | Check which provider is responding | Look at api logs for `vision_call` entries with latency |
+| WebSocket won't connect | Check backend is running | Ensure uvicorn is running on 0.0.0.0:8000 |
+| Slow obstacle detection | Check which provider is responding | Look at terminal logs for `vision_call` entries with latency |
+| SQLite locked errors | Multiple processes accessing DB | Only run one uvicorn instance at a time |
 
 ### View logs:
 
+Backend logs appear directly in the terminal where you ran `bash run.sh`. For background mode:
+
 ```bash
-# All services
-docker compose logs -f
+# Run in background with logs to file
+bash run.sh > aria.log 2>&1 &
 
-# Just the API (most useful)
-docker compose logs -f api
+# View logs
+tail -f aria.log
 
-# Last 100 lines
-docker compose logs --tail 100 api
+# Stop the server
+kill %1
 ```
 
-### Restart a single service:
+### Full reset:
 
 ```bash
-docker compose restart api
-```
-
-### Full reset (nuclear option):
-
-```bash
-docker compose down -v   # WARNING: deletes all database data
-docker compose up --build -d
-docker compose exec api alembic upgrade head
+cd ~/ARIA/backend
+rm -f aria.db        # Deletes all data — tables recreated on next start
+bash run.sh
 ```
 
 ---

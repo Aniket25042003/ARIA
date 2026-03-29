@@ -1,5 +1,8 @@
+import asyncio
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
+import cv2
 import mediapipe as mp
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,42 +34,40 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 router = APIRouter()
 
+# Thread pool for CPU-bound work (MediaPipe, emotion detection)
+_executor = ThreadPoolExecutor(max_workers=2)
+
 # MediaPipe Hands — initialized once, reused for all WebSocket connections
 _mp_hands = mp.solutions.hands
 _hands = _mp_hands.Hands(
-    static_image_mode=True,  # True because we process individual frames
+    static_image_mode=True,
     max_num_hands=1,
-    min_detection_confidence=0.7,
-    min_tracking_confidence=0.5,
+    min_detection_confidence=0.65,
 )
 
 
-def _extract_landmarks(frame_b64: str) -> list[list[float]] | None:
-    """Extract hand landmarks from a base64 JPEG frame using MediaPipe."""
+def _extract_landmarks_sync(frame_b64: str) -> list[list[float]] | None:
+    """Extract hand landmarks (CPU-bound, run in thread pool)."""
     try:
-        import cv2
-
         image = decode_base64_image(frame_b64)
+        # Downscale for faster MediaPipe processing
+        h, w = image.shape[:2]
+        if w > 320:
+            scale = 320 / w
+            image = cv2.resize(image, (320, int(h * scale)), interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         result = _hands.process(rgb)
-
         if result.multi_hand_landmarks:
             lm = result.multi_hand_landmarks[0]
             return [[l.x, l.y, l.z] for l in lm.landmark]
         return None
     except Exception:
-        logger.exception("landmark_extraction_error")
         return None
 
 
-@router.websocket("/ws/sign")
+@router.websocket("/ws")
 async def sign_websocket(websocket: WebSocket):
-    """WebSocket endpoint for real-time SIGN mode.
-
-    Client sends frames from phone camera.
-    Server processes MediaPipe → ASL classification → emotion → sentence → TTS.
-    """
-    # Auth via query param
+    """Real-time SIGN mode WebSocket."""
     token = websocket.query_params.get("token")
     if not token:
         await websocket.close(code=4001, reason="Missing token")
@@ -80,7 +81,6 @@ async def sign_websocket(websocket: WebSocket):
     await websocket.accept()
     logger.info("sign_ws_connected", user_id=user_id)
 
-    # Create a sign session in DB
     db_session_id = None
     try:
         async with async_session_factory() as db:
@@ -91,6 +91,8 @@ async def sign_websocket(websocket: WebSocket):
             await db.commit()
     except Exception:
         logger.exception("sign_session_create_error")
+
+    loop = asyncio.get_event_loop()
 
     try:
         while True:
@@ -103,12 +105,14 @@ async def sign_websocket(websocket: WebSocket):
                     continue
 
                 session = await get_session(user_id)
+                frame_count = session["frame_count"]
 
-                # Extract hand landmarks from frame
-                landmarks = _extract_landmarks(frame_b64)
+                # Run MediaPipe in thread pool (non-blocking)
+                landmarks = await loop.run_in_executor(
+                    _executor, _extract_landmarks_sync, frame_b64
+                )
 
                 if landmarks:
-                    # Classify ASL letter
                     letter = classify_asl(landmarks)
                     if letter:
                         session = await append_letter(user_id, letter)
@@ -119,9 +123,11 @@ async def sign_websocket(websocket: WebSocket):
                             "buffer": buffer_str,
                         })
 
-                # Emotion detection (every 5th frame to save CPU)
-                if session["frame_count"] % 5 == 0 and frame_b64:
-                    emotion, confidence = detect_emotion_from_frame(frame_b64)
+                # Emotion detection every 8th frame (in thread pool)
+                if frame_count % 8 == 0 and frame_b64:
+                    emotion, confidence = await loop.run_in_executor(
+                        _executor, detect_emotion_from_frame, frame_b64
+                    )
                     await set_emotion(user_id, emotion, confidence)
                     await websocket.send_json({
                         "type": "emotion",
@@ -129,12 +135,17 @@ async def sign_websocket(websocket: WebSocket):
                         "confidence": confidence,
                     })
 
+                # Increment frame count even when no hand detected
+                if not landmarks:
+                    session["frame_count"] = frame_count + 1
+                    from app.services.session_manager import update_session
+                    await update_session(user_id, session)
+
                 # Check if we should build a sentence
                 if await should_build_sentence(user_id):
                     raw_text, emotion = await get_and_clear_buffer(user_id)
 
                     if raw_text:
-                        # Check for SOS
                         if contains_sos_trigger(raw_text):
                             async with async_session_factory() as db:
                                 sentence, audio_file = await trigger_sos(user_id, db)
@@ -146,12 +157,12 @@ async def sign_websocket(websocket: WebSocket):
                             })
                             continue
 
-                        # Build sentence via vision manager
+                        # Build sentence via LLM
                         try:
                             result = await vision_manager.build_sentence(raw_text, emotion)
                             sentence = result.text
                         except Exception:
-                            sentence = raw_text  # Fallback: use raw letters
+                            sentence = raw_text
 
                         # Translate if needed
                         lang = session.get("language", "en")
@@ -162,24 +173,14 @@ async def sign_websocket(websocket: WebSocket):
                             except Exception:
                                 pass
 
-                        # Generate TTS
+                        # TTS
                         audio_file = await speak(sentence, emotion=emotion)
 
-                        # Log transcript
+                        # Log transcript (fire-and-forget)
                         if db_session_id:
-                            try:
-                                async with async_session_factory() as db:
-                                    entry = TranscriptEntry(
-                                        session_id=db_session_id,
-                                        text=sentence,
-                                        raw_letters=raw_text,
-                                        emotion=emotion,
-                                        language=lang,
-                                    )
-                                    db.add(entry)
-                                    await db.commit()
-                            except Exception:
-                                logger.exception("transcript_save_error")
+                            asyncio.create_task(_save_transcript(
+                                db_session_id, sentence, raw_text, emotion, lang
+                            ))
 
                         await websocket.send_json({
                             "type": "sentence",
@@ -202,7 +203,6 @@ async def sign_websocket(websocket: WebSocket):
         logger.exception("sign_ws_error", user_id=user_id)
     finally:
         await delete_session(user_id)
-        # End the DB session
         if db_session_id:
             try:
                 async with async_session_factory() as db:
@@ -219,21 +219,37 @@ async def sign_websocket(websocket: WebSocket):
                 pass
 
 
+async def _save_transcript(
+    session_id, text: str, raw_letters: str, emotion: str, language: str
+) -> None:
+    """Fire-and-forget transcript save."""
+    try:
+        async with async_session_factory() as db:
+            entry = TranscriptEntry(
+                session_id=session_id,
+                text=text,
+                raw_letters=raw_letters,
+                emotion=emotion,
+                language=language,
+            )
+            db.add(entry)
+            await db.commit()
+    except Exception:
+        logger.exception("transcript_save_error")
+
+
 @router.post("/speak", response_model=SpeakResponse)
 async def manual_speak(
     req: SpeakRequest,
     user: User = Depends(get_current_user),
 ):
-    """Manually speak any text — for testing or manual input."""
     text = req.text
-
     if req.language != "en":
         try:
             result = await vision_manager.translate(text, req.language)
             text = result.text
         except Exception:
             pass
-
     audio_file = await speak(text, emotion=req.emotion)
     return SpeakResponse(sentence=text, audio_url=f"/audio/{audio_file}")
 
@@ -244,7 +260,6 @@ async def manual_sos(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Trigger SOS from the app's emergency button."""
     sentence, audio_file = await trigger_sos(
         str(user.id), db, latitude=req.latitude, longitude=req.longitude
     )
@@ -257,7 +272,6 @@ async def get_transcript(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get transcript entries for a sign session."""
     from sqlalchemy import select
 
     result = await db.execute(
@@ -266,7 +280,6 @@ async def get_transcript(
         .order_by(TranscriptEntry.created_at)
     )
     entries = result.scalars().all()
-
     return {
         "entries": [
             {

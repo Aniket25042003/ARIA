@@ -28,8 +28,10 @@ export function useObstacleScanner(cameraRef: React.RefObject<CameraView | null>
         const response = await sendObstacleFrame(photo.base64);
         setLastWarning(response.warning, response.severity);
 
-        // Play audio warning
-        await playAudioFromUrl(response.audio_url);
+        // Play audio warning only if there is one (clear paths skip TTS)
+        if (response.audio_url) {
+          await playAudioFromUrl(response.audio_url);
+        }
 
         // Haptic feedback based on severity
         if (response.severity === "danger") {

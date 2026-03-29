@@ -18,7 +18,7 @@ import LanguageSelector from "../../components/sign/LanguageSelector";
 import { colors, spacing, borderRadius, fontSize } from "../../constants/theme";
 import { a11y } from "../../constants/accessibility";
 
-const FRAME_INTERVAL_MS = 100; // Send at most 10 frames per second
+const FRAME_INTERVAL_MS = 250; // 4 fps — matches backend processing speed
 
 export default function SignScreen() {
   const [permission, requestPermission] = useCameraPermissions();

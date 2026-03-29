@@ -1,6 +1,10 @@
 from datetime import datetime, timezone
 
-from app.db.mongo import get_mongo_db
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.postgres import async_session_factory
+from app.models.postgres.user_data import UserPreferences
 
 DEFAULT_PREFERENCES = {
     "default_mode": "sign",
@@ -21,25 +25,53 @@ DEFAULT_PREFERENCES = {
 }
 
 
-async def get_user_preferences(user_id: str) -> dict | None:
-    db = get_mongo_db()
-    return await db.user_preferences.find_one({"user_id": user_id}, {"_id": 0})
+async def get_user_preferences(user_id: str, session: AsyncSession | None = None) -> dict | None:
+    async def _query(s: AsyncSession):
+        result = await s.execute(
+            select(UserPreferences).where(UserPreferences.user_id == user_id)
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            return {"user_id": row.user_id, **row.preferences}
+        return None
+
+    if session:
+        return await _query(session)
+    async with async_session_factory() as s:
+        return await _query(s)
 
 
-async def create_user_preferences(user_id: str) -> dict:
-    db = get_mongo_db()
-    prefs = {
-        "user_id": user_id,
-        **DEFAULT_PREFERENCES,
-        "updated_at": datetime.now(timezone.utc),
-    }
-    await db.user_preferences.insert_one(prefs)
-    prefs.pop("_id", None)
-    return prefs
+async def create_user_preferences(user_id: str, session: AsyncSession | None = None) -> dict:
+    async def _create(s: AsyncSession, commit: bool):
+        prefs = UserPreferences(user_id=user_id, preferences=DEFAULT_PREFERENCES)
+        s.add(prefs)
+        if commit:
+            await s.commit()
+        return {"user_id": user_id, **DEFAULT_PREFERENCES}
+
+    if session:
+        return await _create(session, commit=False)
+    async with async_session_factory() as s:
+        result = await _create(s, commit=True)
+        return result
 
 
-async def update_user_preferences(user_id: str, updates: dict) -> dict | None:
-    db = get_mongo_db()
-    updates["updated_at"] = datetime.now(timezone.utc)
-    await db.user_preferences.update_one({"user_id": user_id}, {"$set": updates})
+async def update_user_preferences(user_id: str, updates: dict, session: AsyncSession | None = None) -> dict | None:
+    async def _update(s: AsyncSession, commit: bool):
+        result = await s.execute(
+            select(UserPreferences).where(UserPreferences.user_id == user_id)
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            merged = {**row.preferences, **updates}
+            row.preferences = merged
+            row.updated_at = datetime.now(timezone.utc)
+            if commit:
+                await s.commit()
+
+    if session:
+        await _update(session, commit=False)
+    else:
+        async with async_session_factory() as s:
+            await _update(s, commit=True)
     return await get_user_preferences(user_id)

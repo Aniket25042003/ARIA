@@ -33,10 +33,14 @@ export default function RegisterScreen() {
     try {
       await register(email.trim(), password, name.trim());
     } catch (err: any) {
-      Alert.alert(
-        "Registration Failed",
-        err.response?.data?.detail || "Something went wrong. Try again."
-      );
+      const detail = err.response?.data?.detail;
+      const status = err.response?.status;
+      const code = err.code;
+      const url = err.config?.baseURL;
+      const msg = detail
+        ? `${status}: ${detail}`
+        : `${code || "UNKNOWN"}: ${err.message}\n\nURL: ${url}`;
+      Alert.alert("Registration Failed", msg);
     } finally {
       setLoading(false);
     }

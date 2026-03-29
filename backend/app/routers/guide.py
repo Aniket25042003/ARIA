@@ -30,13 +30,25 @@ async def detect_obstacle(
     """Analyze a camera frame for obstacles. Returns warning + audio."""
     result = await vision_manager.detect_obstacle(req.frame)
 
-    # Generate TTS for the warning
+    # Skip TTS for clear paths — saves ~500ms per scan
+    if result.severity == "clear":
+        return ObstacleResponse(
+            warning=result.text,
+            severity=result.severity,
+            audio_url="",
+            provider=result.provider,
+            latency_ms=int(result.latency_ms),
+        )
+
+    # Generate TTS only for actual warnings
     audio_file = await speak(result.text, emotion="guide")
 
     return ObstacleResponse(
         warning=result.text,
         severity=result.severity,
         audio_url=f"/audio/{audio_file}",
+        provider=result.provider,
+        latency_ms=int(result.latency_ms),
     )
 
 
@@ -96,7 +108,7 @@ async def get_navigation(
     )
 
 
-@router.websocket("/ws/guide/nav")
+@router.websocket("/ws/nav")
 async def guide_nav_websocket(websocket: WebSocket):
     """WebSocket for real-time navigation step advancement.
 

@@ -5,9 +5,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.db.mongo import close_mongo, init_mongo
 from app.db.postgres import close_postgres, init_postgres
-from app.db.redis import close_redis, init_redis
 from app.middleware.cors import setup_cors
 from app.middleware.logging import LoggingMiddleware
 from app.routers import auth, guide, health, sign, user
@@ -23,10 +21,8 @@ async def lifespan(app: FastAPI):
     setup_logging(debug=settings.debug)
     logger.info("starting_aria_backend", version=settings.app_version)
 
-    # Initialize databases
+    # Initialize database (SQLite — creates tables on first run)
     await init_postgres()
-    await init_mongo()
-    await init_redis()
 
     # Ensure audio output directory exists
     ensure_audio_dir()
@@ -44,8 +40,6 @@ async def lifespan(app: FastAPI):
     # Shutdown
     cleanup_task.cancel()
     health_task.cancel()
-    await close_redis()
-    await close_mongo()
     await close_postgres()
     logger.info("aria_backend_stopped")
 

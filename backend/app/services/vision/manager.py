@@ -116,7 +116,7 @@ class VisionManager:
     async def run_health_loop(self) -> None:
         """Background task to periodically refresh provider health."""
         while True:
-            await asyncio.sleep(60)
+            await asyncio.sleep(15)  # Check every 15s for faster recovery
             await self.refresh_health()
 
     async def _log_usage(
@@ -141,6 +141,16 @@ class VisionManager:
         except Exception:
             # Don't let logging failures break the main flow
             pass
+
+    def reset_provider_health(self, name: str | None = None) -> dict[str, str]:
+        """Force-reset health cache. If name given, reset only that provider."""
+        if name:
+            if name in self._health_cache:
+                self._health_cache[name] = True
+        else:
+            for p in self._providers:
+                self._health_cache[p.name] = True
+        return self.get_provider_status()
 
     def get_provider_status(self) -> dict[str, str]:
         return {

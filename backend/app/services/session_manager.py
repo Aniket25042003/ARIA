@@ -1,39 +1,44 @@
-import json
+import time
 
-from app.db.redis import get_redis
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-SESSION_PREFIX = "aria:sign_session:"
 SESSION_TTL = 3600  # 1 hour
 
+# In-memory session store: {user_id: {"data": dict, "expires_at": float}}
+_sessions: dict[str, dict] = {}
 
-async def get_session(user_id: str) -> dict:
-    """Get or create a sign session for a user."""
-    redis = get_redis()
-    key = f"{SESSION_PREFIX}{user_id}"
-    data = await redis.get(key)
 
-    if data:
-        return json.loads(data)
-
-    session = {
+def _default_session() -> dict:
+    return {
         "letter_buffer": [],
         "last_emotion": "neutral",
         "last_confidence": 0.0,
         "language": "en",
         "frame_count": 0,
     }
-    await redis.setex(key, SESSION_TTL, json.dumps(session))
+
+
+def _cleanup_expired() -> None:
+    now = time.time()
+    expired = [k for k, v in _sessions.items() if v["expires_at"] < now]
+    for k in expired:
+        del _sessions[k]
+
+
+async def get_session(user_id: str) -> dict:
+    _cleanup_expired()
+    entry = _sessions.get(user_id)
+    if entry and entry["expires_at"] > time.time():
+        return entry["data"]
+    session = _default_session()
+    _sessions[user_id] = {"data": session, "expires_at": time.time() + SESSION_TTL}
     return session
 
 
 async def update_session(user_id: str, session: dict) -> None:
-    """Persist updated session state."""
-    redis = get_redis()
-    key = f"{SESSION_PREFIX}{user_id}"
-    await redis.setex(key, SESSION_TTL, json.dumps(session))
+    _sessions[user_id] = {"data": session, "expires_at": time.time() + SESSION_TTL}
 
 
 async def append_letter(user_id: str, letter: str) -> dict:
@@ -89,6 +94,4 @@ async def should_build_sentence(user_id: str, threshold: int = 6) -> bool:
 
 async def delete_session(user_id: str) -> None:
     """Delete the session (on disconnect)."""
-    redis = get_redis()
-    key = f"{SESSION_PREFIX}{user_id}"
-    await redis.delete(key)
+    _sessions.pop(user_id, None)

@@ -2,10 +2,8 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # Database
-    database_url: str = "postgresql+asyncpg://aria:aria@localhost:5432/aria"
-    mongo_url: str = "mongodb://aria:aria@localhost:27017/aria?authSource=admin"
-    redis_url: str = "redis://localhost:6379/0"
+    # Database (single SQLite file)
+    database_url: str = "sqlite+aiosqlite:///./aria.db"
 
     # API Keys
     gemini_api_key: str = ""
@@ -23,7 +21,7 @@ class Settings(BaseSettings):
     vision_provider_order: str = "gemini,openai,claude,local"
 
     # Audio
-    audio_output_dir: str = "/app/audio_output"
+    audio_output_dir: str = "./audio_output"
     audio_cleanup_max_age_seconds: int = 300  # 5 minutes
 
     # App

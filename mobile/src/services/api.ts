@@ -5,7 +5,7 @@ import { getToken, removeToken, removeUser } from "../utils/storage";
 
 const api = axios.create({
   baseURL: BACKEND_URL,
-  timeout: 10000,
+  timeout: 30000,
 });
 
 // Dynamically set baseURL from connection store on every request

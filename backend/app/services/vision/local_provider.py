@@ -44,10 +44,10 @@ class LocalProvider(VisionProvider):
         start = time.monotonic()
 
         image = decode_base64_image(image_b64)
-        image = resize_image(image, max_dimension=640)
+        image = resize_image(image, max_dimension=416)
 
         model = _get_yolo_model()
-        results = model(image, verbose=False, conf=0.4)
+        results = model(image, verbose=False, conf=0.35, imgsz=416)
 
         detections = []
         has_danger = False

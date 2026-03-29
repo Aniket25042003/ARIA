@@ -65,7 +65,7 @@ export function useSignWebSocket() {
     if (wsRef.current) {
       wsRef.current.disconnect();
     }
-    wsRef.current = new WSManager("/ws/sign", handleMessage, setSignWsConnected);
+    wsRef.current = new WSManager("/sign/ws", handleMessage, setSignWsConnected);
     wsRef.current.connect();
     setIsListening(true);
   }, [handleMessage, setSignWsConnected, setIsListening]);

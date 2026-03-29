@@ -46,7 +46,7 @@ export function useGuideNavWebSocket() {
       }
 
       wsRef.current = new WSManager(
-        "/ws/guide/nav",
+        "/guide/ws/nav",
         handleMessage,
         setGuideWsConnected
       );

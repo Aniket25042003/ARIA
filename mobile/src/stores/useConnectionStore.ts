@@ -47,7 +47,12 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   loadBackendUrl: async () => {
     const saved = await getBackendUrl();
     if (saved) {
-      set({ backendUrl: saved });
+      // Clear stale USB-only URL if default has changed
+      if (saved === "http://192.168.55.1:8000" && DEFAULT_BACKEND_URL !== "http://192.168.55.1:8000") {
+        await removeBackendUrl();
+      } else {
+        set({ backendUrl: saved });
+      }
     }
   },
 

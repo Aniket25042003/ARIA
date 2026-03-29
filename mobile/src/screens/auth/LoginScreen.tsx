@@ -34,10 +34,13 @@ export default function LoginScreen() {
     try {
       await login(email.trim(), password);
     } catch (err: any) {
-      Alert.alert(
-        "Login Failed",
-        err.response?.data?.detail || "Check your credentials and try again"
-      );
+      const detail = err.response?.data?.detail;
+      const status = err.response?.status;
+      const code = err.code;
+      const msg = detail
+        ? `${status}: ${detail}`
+        : `${code || "UNKNOWN"}: ${err.message}`;
+      Alert.alert("Login Failed", msg);
     } finally {
       setLoading(false);
     }

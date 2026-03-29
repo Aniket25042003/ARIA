@@ -7,25 +7,21 @@ from app.config import settings
 from app.services.vision.base import VisionProvider, VisionResult
 
 OBSTACLE_PROMPT = (
-    "You are a navigation assistant for a blind person. "
-    "Describe ONLY immediate obstacles or hazards visible. "
-    "Use under 8 words. Examples: 'Step down ahead', "
-    "'Person walking toward you', 'Door on your right', "
-    "'Curb ahead, step up'. If safe: say 'Path is clear'. "
-    "Also classify severity as one of: clear, caution, danger."
-    "Format: SEVERITY|description"
+    "Navigation assistant for blind person. "
+    "Immediate obstacles only, under 6 words. "
+    "If safe: 'clear|Path is clear'. "
+    "Format: SEVERITY|description. "
+    "SEVERITY is: clear, caution, or danger."
 )
 
 SENTENCE_PROMPT_TEMPLATE = (
-    "A deaf/mute person is signing. Detected letters: '{letters}'. "
-    "Their facial expression shows: {emotion}. "
-    "Complete this into ONE natural sentence they are trying to say. "
-    "If emotion is 'fear' or 'sad', make it sound urgent. "
-    "Return ONLY the sentence. No quotes. No explanation."
+    "A deaf/mute person signed these letters: '{letters}'. "
+    "Emotion: {emotion}. "
+    "Complete into ONE natural sentence. Return ONLY the sentence."
 )
 
 TRANSLATE_PROMPT_TEMPLATE = (
-    "Translate this to {language}. Return ONLY the translation: '{text}'"
+    "Translate to {language}. Return ONLY the translation: '{text}'"
 )
 
 
@@ -34,12 +30,27 @@ class GeminiProvider(VisionProvider):
 
     def __init__(self):
         genai.configure(api_key=settings.gemini_api_key)
-        self._model = genai.GenerativeModel("gemini-1.5-flash")
+        # Use Flash-Lite for speed; fall back to Flash if unavailable
+        self._model = genai.GenerativeModel("gemini-2.0-flash")
+        self._text_model = genai.GenerativeModel(
+            "gemini-2.0-flash",
+            generation_config=genai.GenerationConfig(
+                max_output_tokens=60,
+                temperature=0.3,
+            ),
+        )
+        self._image_model = genai.GenerativeModel(
+            "gemini-2.0-flash",
+            generation_config=genai.GenerationConfig(
+                max_output_tokens=30,
+                temperature=0.2,
+            ),
+        )
 
     async def detect_obstacle(self, image_b64: str) -> VisionResult:
         start = time.monotonic()
         image_data = base64.b64decode(image_b64)
-        response = self._model.generate_content([
+        response = self._image_model.generate_content([
             OBSTACLE_PROMPT,
             {"mime_type": "image/jpeg", "data": image_data},
         ])
@@ -54,7 +65,7 @@ class GeminiProvider(VisionProvider):
     async def build_sentence(self, partial_text: str, emotion: str) -> VisionResult:
         start = time.monotonic()
         prompt = SENTENCE_PROMPT_TEMPLATE.format(letters=partial_text, emotion=emotion)
-        response = self._model.generate_content(prompt)
+        response = self._text_model.generate_content(prompt)
         latency = (time.monotonic() - start) * 1000
         return VisionResult(
             text=response.text.strip(), provider=self.name, latency_ms=latency
@@ -65,7 +76,7 @@ class GeminiProvider(VisionProvider):
             return VisionResult(text=text, provider=self.name, latency_ms=0)
         start = time.monotonic()
         prompt = TRANSLATE_PROMPT_TEMPLATE.format(language=target_lang, text=text)
-        response = self._model.generate_content(prompt)
+        response = self._text_model.generate_content(prompt)
         latency = (time.monotonic() - start) * 1000
         return VisionResult(
             text=response.text.strip(), provider=self.name, latency_ms=latency
@@ -73,7 +84,7 @@ class GeminiProvider(VisionProvider):
 
     async def health_check(self) -> bool:
         try:
-            response = self._model.generate_content("Say 'ok'")
+            response = self._model.generate_content("Say ok")
             return bool(response.text)
         except Exception:
             return False
@@ -86,7 +97,6 @@ class GeminiProvider(VisionProvider):
             text = parts[1].strip()
             if severity in ("clear", "caution", "danger"):
                 return severity, text
-        # Fallback: infer severity from keywords
         lower = raw.lower()
         if any(w in lower for w in ("danger", "stop", "careful", "watch out")):
             return "danger", raw
