@@ -21,6 +21,7 @@ from app.services.session_manager import (
     delete_session,
     get_and_clear_buffer,
     get_session,
+    increment_frame_count,
     set_emotion,
     set_language,
     should_build_sentence,
@@ -105,48 +106,54 @@ async def sign_websocket(websocket: WebSocket):
                 if not frame_b64:
                     continue
 
-                session = await get_session(user_id)
-                frame_count = session["frame_count"]
-
                 # Run MediaPipe in thread pool (non-blocking)
                 landmarks = await loop.run_in_executor(
                     _executor, _extract_landmarks_sync, frame_b64
                 )
 
                 if landmarks:
-                    letter, confidence = classify_asl(landmarks)
+                    letter, conf = classify_asl(landmarks)
                     if letter:
-                        session = await append_letter(user_id, letter, confidence)
+                        session = await append_letter(user_id, letter, conf)
                         buffer_str = "".join(session["letter_buffer"])
                         await websocket.send_json({
                             "type": "letter",
                             "letter": letter,
                             "buffer": buffer_str,
                         })
+                else:
+                    # No hand detected — track for dedup reset
+                    session = await increment_frame_count(user_id)
 
                 # Emotion detection every 8th frame (in thread pool)
-                if frame_count % 8 == 0 and frame_b64:
-                    emotion, confidence = await loop.run_in_executor(
-                        _executor, detect_emotion_from_frame, frame_b64
-                    )
-                    await set_emotion(user_id, emotion, confidence)
-                    await websocket.send_json({
-                        "type": "emotion",
-                        "emotion": emotion,
-                        "confidence": confidence,
-                    })
-
-                # Increment frame count even when no hand detected
-                if not landmarks:
-                    session["frame_count"] = frame_count + 1
-                    from app.services.session_manager import update_session
-                    await update_session(user_id, session)
+                # Re-read fresh frame_count after append/increment
+                fresh_session = await get_session(user_id)
+                if fresh_session["frame_count"] % 8 == 0 and frame_b64:
+                    try:
+                        emotion, em_conf = await loop.run_in_executor(
+                            _executor, detect_emotion_from_frame, frame_b64
+                        )
+                        await set_emotion(user_id, emotion, em_conf)
+                        await websocket.send_json({
+                            "type": "emotion",
+                            "emotion": emotion,
+                            "confidence": em_conf,
+                        })
+                    except Exception:
+                        pass
 
                 # Check if we should build a sentence
                 if await should_build_sentence(user_id):
                     raw_text, emotion = await get_and_clear_buffer(user_id)
 
                     if raw_text:
+                        logger.info(
+                            "building_sentence",
+                            raw_text=raw_text,
+                            emotion=emotion,
+                            user_id=user_id,
+                        )
+
                         if contains_sos_trigger(raw_text):
                             async with async_session_factory() as db:
                                 sentence, audio_file = await trigger_sos(user_id, db)
@@ -162,11 +169,20 @@ async def sign_websocket(websocket: WebSocket):
                         try:
                             result = await vision_manager.build_sentence(raw_text, emotion)
                             sentence = result.text
+                            logger.info(
+                                "sentence_built",
+                                raw=raw_text,
+                                sentence=sentence,
+                                provider=result.provider,
+                                latency_ms=int(result.latency_ms),
+                            )
                         except Exception:
+                            logger.exception("build_sentence_failed", raw=raw_text)
                             sentence = raw_text
 
                         # Translate if needed
-                        lang = session.get("language", "en")
+                        lang_session = await get_session(user_id)
+                        lang = lang_session.get("language", "en")
                         if lang != "en":
                             try:
                                 tr = await vision_manager.translate(sentence, lang)
