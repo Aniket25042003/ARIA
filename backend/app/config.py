@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_session_token: str = ""
-    bedrock_model_id: str = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+    bedrock_model_id: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
     # Vision
     vision_provider_order: str = "bedrock,openai,claude,local"

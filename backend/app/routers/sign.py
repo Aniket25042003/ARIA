@@ -62,7 +62,17 @@ async def sign_websocket(websocket: WebSocket):
     collection_start: float | None = None
     last_frame_time: float = time.monotonic()
     processing = False                  # True while pipeline is running
+    ws_closed = False                   # Set on disconnect to prevent send errors
     language = "en"
+
+    async def _safe_send(msg: dict):
+        """Send JSON to WebSocket, silently ignore if already closed."""
+        if ws_closed:
+            return
+        try:
+            await websocket.send_json(msg)
+        except RuntimeError:
+            pass
 
     async def _process_frames():
         """Take buffered frames → Bedrock vision → Bedrock sentence → TTS → send."""
@@ -98,14 +108,14 @@ async def sign_websocket(websocket: WebSocket):
             )
 
             # Send intermediate result to client
-            await websocket.send_json({
+            await _safe_send({
                 "type": "signs_detected",
                 "signs": signs,
                 "emotion": emotion,
             })
 
             if signs.upper() == "NONE" or not signs.strip():
-                await websocket.send_json({
+                await _safe_send({
                     "type": "status",
                     "message": "No signs detected, keep signing...",
                 })
@@ -116,7 +126,7 @@ async def sign_websocket(websocket: WebSocket):
                 async with async_session_factory() as db:
                     sentence, audio_file = await trigger_sos(user_id, db)
                     await db.commit()
-                await websocket.send_json({
+                await _safe_send({
                     "type": "sos_triggered",
                     "text": sentence,
                     "audio_url": f"/audio/{audio_file}",
@@ -152,7 +162,7 @@ async def sign_websocket(websocket: WebSocket):
                 ))
 
             # Send final result to client
-            await websocket.send_json({
+            await _safe_send({
                 "type": "sentence",
                 "text": sentence,
                 "emotion": emotion,
@@ -161,13 +171,10 @@ async def sign_websocket(websocket: WebSocket):
 
         except Exception:
             logger.exception("pipeline_error", user_id=user_id)
-            try:
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "Processing failed, please try again",
-                })
-            except Exception:
-                pass
+            await _safe_send({
+                "type": "error",
+                "message": "Processing failed, please try again",
+            })
         finally:
             processing = False
 
@@ -215,7 +222,7 @@ async def sign_websocket(websocket: WebSocket):
             elif msg_type == "clear_buffer":
                 frame_buffer.clear()
                 collection_start = None
-                await websocket.send_json({"type": "letter", "letter": "", "buffer": ""})
+                await _safe_send({"type": "letter", "letter": "", "buffer": ""})
 
             elif msg_type == "set_language":
                 language = data.get("language", "en")
@@ -231,6 +238,7 @@ async def sign_websocket(websocket: WebSocket):
     except Exception:
         logger.exception("sign_ws_error", user_id=user_id)
     finally:
+        ws_closed = True
         # Process any remaining frames before disconnect
         if frame_buffer and not processing:
             try:
