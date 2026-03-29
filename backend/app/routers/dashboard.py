@@ -1,0 +1,348 @@
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import func, select, case, distinct
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.dependencies import get_current_user, get_db
+from app.models.postgres.api_usage import APIUsage
+from app.models.postgres.navigation_log import NavigationLog
+from app.models.postgres.sos_event import SOSEvent
+from app.models.postgres.transcript import SignSession, TranscriptEntry
+from app.models.postgres.user import User
+
+router = APIRouter()
+
+
+@router.get("/summary")
+async def dashboard_summary(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """High-level usage summary for the current user."""
+    uid = user.id
+
+    # Sign sessions count + total transcript entries
+    sign_sessions = await db.scalar(
+        select(func.count()).select_from(SignSession).where(SignSession.user_id == uid)
+    )
+    transcript_entries = await db.scalar(
+        select(func.count())
+        .select_from(TranscriptEntry)
+        .join(SignSession, TranscriptEntry.session_id == SignSession.id)
+        .where(SignSession.user_id == uid)
+    )
+
+    # Navigation count + completed
+    nav_total = await db.scalar(
+        select(func.count()).select_from(NavigationLog).where(NavigationLog.user_id == uid)
+    )
+    nav_completed = await db.scalar(
+        select(func.count())
+        .select_from(NavigationLog)
+        .where(NavigationLog.user_id == uid, NavigationLog.ended_at.isnot(None))
+    )
+
+    # SOS events
+    sos_count = await db.scalar(
+        select(func.count()).select_from(SOSEvent).where(SOSEvent.user_id == uid)
+    )
+
+    return {
+        "user_name": user.name,
+        "sign_mode": {
+            "total_sessions": sign_sessions or 0,
+            "total_sentences": transcript_entries or 0,
+        },
+        "guide_mode": {
+            "total_navigations": nav_total or 0,
+            "completed_navigations": nav_completed or 0,
+        },
+        "sos_events": sos_count or 0,
+    }
+
+
+@router.get("/sign-activity")
+async def sign_activity(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Detailed SIGN mode activity: emotions used, languages, recent sentences."""
+    uid = user.id
+
+    # Emotion distribution across all transcript entries
+    emotion_rows = (
+        await db.execute(
+            select(TranscriptEntry.emotion, func.count().label("count"))
+            .join(SignSession, TranscriptEntry.session_id == SignSession.id)
+            .where(SignSession.user_id == uid)
+            .group_by(TranscriptEntry.emotion)
+            .order_by(func.count().desc())
+        )
+    ).all()
+    emotion_distribution = {row.emotion: row.count for row in emotion_rows}
+
+    # Language usage
+    lang_rows = (
+        await db.execute(
+            select(TranscriptEntry.language, func.count().label("count"))
+            .join(SignSession, TranscriptEntry.session_id == SignSession.id)
+            .where(SignSession.user_id == uid)
+            .group_by(TranscriptEntry.language)
+            .order_by(func.count().desc())
+        )
+    ).all()
+    language_usage = {row.language: row.count for row in lang_rows}
+
+    # Recent sentences (last 20)
+    recent_rows = (
+        await db.execute(
+            select(
+                TranscriptEntry.text,
+                TranscriptEntry.raw_letters,
+                TranscriptEntry.emotion,
+                TranscriptEntry.language,
+                TranscriptEntry.created_at,
+            )
+            .join(SignSession, TranscriptEntry.session_id == SignSession.id)
+            .where(SignSession.user_id == uid)
+            .order_by(TranscriptEntry.created_at.desc())
+            .limit(20)
+        )
+    ).all()
+    recent_sentences = [
+        {
+            "text": r.text,
+            "raw_letters": r.raw_letters,
+            "emotion": r.emotion,
+            "language": r.language,
+            "time": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in recent_rows
+    ]
+
+    # Average session duration
+    session_rows = (
+        await db.execute(
+            select(SignSession.started_at, SignSession.ended_at)
+            .where(SignSession.user_id == uid, SignSession.ended_at.isnot(None))
+        )
+    ).all()
+    if session_rows:
+        durations = [(r.ended_at - r.started_at).total_seconds() for r in session_rows]
+        avg_duration_s = sum(durations) / len(durations)
+    else:
+        avg_duration_s = 0
+
+    return {
+        "emotion_distribution": emotion_distribution,
+        "language_usage": language_usage,
+        "recent_sentences": recent_sentences,
+        "avg_session_duration_seconds": round(avg_duration_s, 1),
+    }
+
+
+@router.get("/guide-activity")
+async def guide_activity(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Detailed GUIDE mode activity: navigation history, obstacle stats."""
+    uid = user.id
+
+    # Recent navigations
+    nav_rows = (
+        await db.execute(
+            select(NavigationLog)
+            .where(NavigationLog.user_id == uid)
+            .order_by(NavigationLog.started_at.desc())
+            .limit(10)
+        )
+    ).scalars().all()
+    navigations = [
+        {
+            "destination": n.destination,
+            "total_steps": n.total_steps,
+            "completed_steps": n.completed_steps,
+            "completed": n.ended_at is not None,
+            "started_at": n.started_at.isoformat() if n.started_at else None,
+            "ended_at": n.ended_at.isoformat() if n.ended_at else None,
+        }
+        for n in nav_rows
+    ]
+
+    # Obstacle detection stats from APIUsage
+    obstacle_total = await db.scalar(
+        select(func.count())
+        .select_from(APIUsage)
+        .where(APIUsage.endpoint == "detect_obstacle")
+    )
+    obstacle_success = await db.scalar(
+        select(func.count())
+        .select_from(APIUsage)
+        .where(APIUsage.endpoint == "detect_obstacle", APIUsage.success == True)
+    )
+    avg_latency = await db.scalar(
+        select(func.avg(APIUsage.latency_ms))
+        .where(APIUsage.endpoint == "detect_obstacle", APIUsage.success == True)
+    )
+
+    # Provider breakdown
+    provider_rows = (
+        await db.execute(
+            select(APIUsage.provider, func.count().label("count"))
+            .where(APIUsage.endpoint == "detect_obstacle")
+            .group_by(APIUsage.provider)
+        )
+    ).all()
+    provider_usage = {row.provider: row.count for row in provider_rows}
+
+    return {
+        "recent_navigations": navigations,
+        "obstacle_detection": {
+            "total_scans": obstacle_total or 0,
+            "successful_scans": obstacle_success or 0,
+            "avg_latency_ms": round(avg_latency, 1) if avg_latency else 0,
+            "provider_breakdown": provider_usage,
+        },
+    }
+
+
+@router.get("/api-performance")
+async def api_performance(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """API performance metrics: latency, success rates, provider health over time."""
+
+    # Per-endpoint stats
+    endpoint_rows = (
+        await db.execute(
+            select(
+                APIUsage.endpoint,
+                func.count().label("total"),
+                func.sum(case((APIUsage.success == True, 1), else_=0)).label("successes"),
+                func.avg(APIUsage.latency_ms).label("avg_latency"),
+                func.min(APIUsage.latency_ms).label("min_latency"),
+                func.max(APIUsage.latency_ms).label("max_latency"),
+            )
+            .group_by(APIUsage.endpoint)
+            .order_by(func.count().desc())
+        )
+    ).all()
+
+    endpoints = [
+        {
+            "endpoint": r.endpoint,
+            "total_calls": r.total,
+            "success_rate": round((r.successes / r.total * 100) if r.total else 0, 1),
+            "avg_latency_ms": round(r.avg_latency, 1) if r.avg_latency else 0,
+            "min_latency_ms": r.min_latency or 0,
+            "max_latency_ms": r.max_latency or 0,
+        }
+        for r in endpoint_rows
+    ]
+
+    # Per-provider stats
+    provider_rows = (
+        await db.execute(
+            select(
+                APIUsage.provider,
+                func.count().label("total"),
+                func.sum(case((APIUsage.success == True, 1), else_=0)).label("successes"),
+                func.avg(APIUsage.latency_ms).label("avg_latency"),
+            )
+            .group_by(APIUsage.provider)
+            .order_by(func.count().desc())
+        )
+    ).all()
+
+    providers = [
+        {
+            "provider": r.provider,
+            "total_calls": r.total,
+            "success_rate": round((r.successes / r.total * 100) if r.total else 0, 1),
+            "avg_latency_ms": round(r.avg_latency, 1) if r.avg_latency else 0,
+        }
+        for r in provider_rows
+    ]
+
+    # Recent errors (last 10)
+    error_rows = (
+        await db.execute(
+            select(
+                APIUsage.provider,
+                APIUsage.endpoint,
+                APIUsage.error_message,
+                APIUsage.latency_ms,
+                APIUsage.created_at,
+            )
+            .where(APIUsage.success == False)
+            .order_by(APIUsage.created_at.desc())
+            .limit(10)
+        )
+    ).all()
+
+    recent_errors = [
+        {
+            "provider": r.provider,
+            "endpoint": r.endpoint,
+            "error": r.error_message,
+            "latency_ms": r.latency_ms,
+            "time": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in error_rows
+    ]
+
+    # Hourly call volume (last 24h)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    hourly_rows = (
+        await db.execute(
+            select(
+                func.strftime("%H", APIUsage.created_at).label("hour"),
+                func.count().label("count"),
+            )
+            .where(APIUsage.created_at >= cutoff)
+            .group_by(func.strftime("%H", APIUsage.created_at))
+            .order_by("hour")
+        )
+    ).all()
+    hourly_volume = {r.hour: r.count for r in hourly_rows}
+
+    return {
+        "endpoints": endpoints,
+        "providers": providers,
+        "recent_errors": recent_errors,
+        "hourly_volume_24h": hourly_volume,
+    }
+
+
+@router.get("/sos-history")
+async def sos_history(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """SOS event history for the current user."""
+    uid = user.id
+
+    sos_rows = (
+        await db.execute(
+            select(SOSEvent)
+            .where(SOSEvent.user_id == uid)
+            .order_by(SOSEvent.triggered_at.desc())
+            .limit(20)
+        )
+    ).scalars().all()
+
+    return {
+        "total": len(sos_rows),
+        "events": [
+            {
+                "id": str(e.id),
+                "latitude": e.latitude,
+                "longitude": e.longitude,
+                "triggered_at": e.triggered_at.isoformat() if e.triggered_at else None,
+            }
+            for e in sos_rows
+        ],
+    }

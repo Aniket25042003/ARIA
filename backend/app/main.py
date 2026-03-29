@@ -8,7 +8,7 @@ from app.config import settings
 from app.db.postgres import close_postgres, init_postgres
 from app.middleware.cors import setup_cors
 from app.middleware.logging import LoggingMiddleware
-from app.routers import auth, guide, health, sign, user
+from app.routers import auth, dashboard, guide, health, sign, user
 from app.services.vision.manager import vision_manager
 from app.utils.audio import cleanup_old_audio, ensure_audio_dir
 from app.utils.logger import get_logger, setup_logging
@@ -66,6 +66,7 @@ def create_app() -> FastAPI:
     app.include_router(user.router, prefix="/user", tags=["user"])
     app.include_router(sign.router, prefix="/sign", tags=["sign"])
     app.include_router(guide.router, prefix="/guide", tags=["guide"])
+    app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
 
     return app
 

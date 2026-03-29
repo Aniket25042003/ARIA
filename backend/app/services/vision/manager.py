@@ -58,9 +58,15 @@ class VisionManager:
         logger.info("vision_manager_ready", providers=[p.name for p in self._providers])
 
     async def detect_obstacle(self, image_b64: str) -> VisionResult:
-        # For obstacle detection, prefer local YOLO (fast, no network dependency)
-        # then fall back to cloud providers if local fails
-        return await self._call_with_fallback("detect_obstacle", image_b64, prefer_local=True)
+        # Use local YOLO only — fast, no network dependency, no Gemini timeout risk
+        for provider in self._providers:
+            if provider.name == "local":
+                start = time.monotonic()
+                result = await provider.detect_obstacle(image_b64)
+                latency = (time.monotonic() - start) * 1000
+                await self._log_usage("local", "detect_obstacle", int(latency), True)
+                return result
+        raise VisionProviderUnavailableError("Local vision provider not available")
 
     async def build_sentence(self, partial_text: str, emotion: str) -> VisionResult:
         return await self._call_with_fallback("build_sentence", partial_text, emotion)
@@ -68,20 +74,13 @@ class VisionManager:
     async def translate(self, text: str, target_lang: str) -> VisionResult:
         return await self._call_with_fallback("translate", text, target_lang)
 
-    async def _call_with_fallback(self, method: str, *args, prefer_local: bool = False) -> VisionResult:
+    async def _call_with_fallback(self, method: str, *args) -> VisionResult:
         if not self._initialized or not self._providers:
             raise VisionProviderUnavailableError("No vision providers available")
 
         last_error = None
 
-        providers = self._providers
-        if prefer_local:
-            # Put local provider first for latency-sensitive operations
-            local = [p for p in self._providers if p.name == "local"]
-            cloud = [p for p in self._providers if p.name != "local"]
-            providers = local + cloud
-
-        for provider in providers:
+        for provider in self._providers:
             if not self._health_cache.get(provider.name, True):
                 continue
 
