@@ -16,8 +16,14 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440  # 24 hours (simple auth)
 
+    # AWS Bedrock
+    aws_region: str = "us-east-1"
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    bedrock_model_id: str = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+
     # Vision
-    vision_provider_order: str = "gemini,openai,claude,local"
+    vision_provider_order: str = "bedrock,openai,claude,local"
 
     # Audio
     audio_output_dir: str = "./audio_output"

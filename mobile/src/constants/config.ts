@@ -6,7 +6,7 @@ export const BACKEND_URL =
 export const WS_URL = BACKEND_URL.replace("http", "ws");
 
 export const OBSTACLE_SCAN_INTERVAL_MS = 1500;
-export const HEALTH_CHECK_INTERVAL_MS = 5000;
+export const HEALTH_CHECK_INTERVAL_MS = 30000; // 30s — no need to poll aggressively
 export const WS_RECONNECT_INTERVAL_MS = 3000;
 
 export const SUPPORTED_LANGUAGES = [

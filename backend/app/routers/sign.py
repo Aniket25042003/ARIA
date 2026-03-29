@@ -15,7 +15,6 @@ from app.models.postgres.transcript import SignSession, TranscriptEntry
 from app.models.postgres.user import User
 from app.schemas.sign import SOSRequest, SpeakRequest, SpeakResponse
 from app.services.auth_service import decode_access_token
-from app.services.emotion_detector import detect_emotion_from_frame
 from app.services.session_manager import (
     add_sign,
     clear_buffer,
@@ -26,7 +25,6 @@ from app.services.session_manager import (
     set_language,
     should_build_sentence,
 )
-from app.services.sign_classifier import classify_sign
 from app.services.sos_service import contains_sos_trigger, trigger_sos
 from app.services.tts_service import speak
 from app.services.vision.manager import vision_manager
@@ -36,9 +34,9 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 router = APIRouter()
 
-_executor = ThreadPoolExecutor(max_workers=4)
+_executor = ThreadPoolExecutor(max_workers=3)
 
-# MediaPipe — hand detection + landmark extraction only
+# MediaPipe — hand detection only (to know WHEN to call Bedrock)
 _mp_hands = mp.solutions.hands
 _hands = _mp_hands.Hands(
     static_image_mode=False,
@@ -47,21 +45,19 @@ _hands = _mp_hands.Hands(
     min_tracking_confidence=0.6,
 )
 
-# Stability: need N consecutive frames with same sign to accept it
-CONFIRM_FRAMES = 3
-CONFIDENCE_THRESHOLD = 0.55
+# Stability detection via landmark distance
+STABILITY_FRAMES = 3
+STABILITY_THRESHOLD = 0.025
+MIN_RECOGNITION_INTERVAL = 1.5  # Seconds between Bedrock calls
 
-# Collection window: accumulate signs, then build sentence
+# Collection window
 COLLECTION_TIMEOUT = 10.0  # Max seconds before auto-building sentence
 NO_HAND_TRIGGER = 10  # ~2s at 5fps without hand → trigger sentence build
 MIN_SIGNS_FOR_SENTENCE = 2
 
-# Emotion detection frequency (every Nth frame)
-EMOTION_EVERY_N_FRAMES = 5
 
-
-def _extract_landmarks_and_frame(frame_b64: str) -> tuple[list[list[float]] | None, np.ndarray | None]:
-    """Extract MediaPipe hand landmarks AND return the decoded frame."""
+def _extract_landmarks_sync(frame_b64: str) -> list[list[float]] | None:
+    """Extract hand landmarks using MediaPipe. Returns None if no hand."""
     try:
         image = decode_base64_image(frame_b64)
         h, w = image.shape[:2]
@@ -72,11 +68,17 @@ def _extract_landmarks_and_frame(frame_b64: str) -> tuple[list[list[float]] | No
         result = _hands.process(rgb)
         if result.multi_hand_landmarks:
             lm = result.multi_hand_landmarks[0]
-            landmarks = [[l.x, l.y, l.z] for l in lm.landmark]
-            return landmarks, image
-        return None, image
+            return [[l.x, l.y, l.z] for l in lm.landmark]
+        return None
     except Exception:
-        return None, None
+        return None
+
+
+def _landmark_distance(lm1: list[list[float]], lm2: list[list[float]]) -> float:
+    """Average Euclidean distance between two landmark sets."""
+    a = np.array(lm1)
+    b = np.array(lm2)
+    return float(np.mean(np.linalg.norm(a - b, axis=1)))
 
 
 @router.websocket("/ws")
@@ -107,12 +109,60 @@ async def sign_websocket(websocket: WebSocket):
     loop = asyncio.get_event_loop()
 
     # Per-connection state
-    last_sign = ""
-    consecutive_count = 0
+    last_landmarks = None
+    stable_count = 0
+    last_recog_time = 0.0
+    recognizing = False
     no_hand_count = 0
     collection_start: float | None = None
-    frame_number = 0
     current_emotion = "neutral"
+
+    async def _do_recognition(frame_b64, landmarks):
+        """Send frame to Bedrock vision → get sign + emotion."""
+        nonlocal recognizing, last_landmarks, stable_count, last_recog_time, current_emotion
+        recognizing = True
+        try:
+            result = await vision_manager.recognize_sign(frame_b64)
+            logger.info(
+                "sign_recognized",
+                sign=result.sign,
+                emotion=result.emotion,
+                provider=result.provider,
+                latency_ms=int(result.latency_ms),
+            )
+
+            # Update emotion from vision model
+            if result.emotion and result.emotion != "neutral":
+                current_emotion = result.emotion
+                await set_emotion(user_id, result.emotion)
+                await websocket.send_json({
+                    "type": "emotion",
+                    "emotion": result.emotion,
+                    "confidence": result.confidence,
+                })
+
+            # Accept sign if valid
+            if result.sign and result.sign != "NONE":
+                session = await add_sign(user_id, result.sign)
+                buf = " ".join(session["sign_buffer"])
+                await websocket.send_json({
+                    "type": "letter",
+                    "letter": result.sign,
+                    "buffer": buf,
+                })
+
+                # Start collection timer on first sign
+                nonlocal collection_start
+                if collection_start is None:
+                    collection_start = time.monotonic()
+
+            last_landmarks = landmarks
+            stable_count = 0
+            last_recog_time = time.monotonic()
+        except Exception:
+            logger.exception("sign_recognition_failed")
+        finally:
+            recognizing = False
 
     try:
         while True:
@@ -124,112 +174,53 @@ async def sign_websocket(websocket: WebSocket):
                 if not frame_b64:
                     continue
 
-                frame_number += 1
-
-                # --- Step 1: MediaPipe hand detection ---
-                landmarks, frame_bgr = await loop.run_in_executor(
-                    _executor, _extract_landmarks_and_frame, frame_b64
+                # Step 1: MediaPipe hand detection (local, fast)
+                landmarks = await loop.run_in_executor(
+                    _executor, _extract_landmarks_sync, frame_b64
                 )
 
-                if not landmarks or frame_bgr is None:
+                if not landmarks:
                     no_hand_count += 1
-                    # No hand for ~2 seconds → build sentence if buffer has signs
+                    # No hand for ~2s → build sentence if buffer has signs
                     if no_hand_count >= NO_HAND_TRIGGER:
                         if await should_build_sentence(user_id, threshold=MIN_SIGNS_FOR_SENTENCE):
                             await _build_and_speak(
                                 user_id, websocket, db_session_id, current_emotion
                             )
                             collection_start = None
-                            last_sign = ""
-                            consecutive_count = 0
                     continue
 
                 no_hand_count = 0
+                now = time.monotonic()
+                time_ok = (now - last_recog_time) >= MIN_RECOGNITION_INTERVAL
 
-                # --- Step 2: Classify sign with HuggingFace model ---
-                sign, confidence = await classify_sign(frame_bgr, landmarks)
-
-                logger.debug(
-                    "sign_classified",
-                    sign=sign,
-                    confidence=round(confidence, 3),
-                    frame=frame_number,
-                )
-
-                # Skip "nothing" / low-confidence
-                if sign in ("NOTHING", "NONE", "DEL", "") or confidence < CONFIDENCE_THRESHOLD:
-                    consecutive_count = 0
-                    last_sign = ""
-                    continue
-
-                # --- Step 3: Stability — same sign N consecutive frames → accept ---
-                if sign == last_sign:
-                    consecutive_count += 1
-                else:
-                    last_sign = sign
-                    consecutive_count = 1
-
-                if consecutive_count == CONFIRM_FRAMES:
-                    # Accept this sign into the buffer
-                    if sign == "SPACE":
-                        session = await get_session(user_id)
-                        buf = " ".join(session["sign_buffer"])
-                        await websocket.send_json({
-                            "type": "letter",
-                            "letter": " ",
-                            "buffer": buf + " ",
-                        })
+                # Step 2: Stability detection — hand must be still before calling Bedrock
+                if last_landmarks is not None:
+                    dist = _landmark_distance(landmarks, last_landmarks)
+                    if dist < STABILITY_THRESHOLD:
+                        stable_count += 1
                     else:
-                        session = await add_sign(user_id, sign)
-                        buf = " ".join(session["sign_buffer"])
-                        await websocket.send_json({
-                            "type": "letter",
-                            "letter": sign,
-                            "buffer": buf,
-                        })
-                        logger.info(
-                            "sign_accepted",
-                            sign=sign,
-                            confidence=round(confidence, 3),
-                            buffer=buf,
-                        )
+                        stable_count = 1
+                        last_landmarks = landmarks
+                else:
+                    last_landmarks = landmarks
+                    stable_count = 1
 
-                    # Start collection timer on first accepted sign
-                    if collection_start is None:
-                        collection_start = time.monotonic()
+                # Step 3: When stable + enough time passed → send to Bedrock vision
+                if stable_count >= STABILITY_FRAMES and time_ok and not recognizing:
+                    asyncio.create_task(_do_recognition(frame_b64, landmarks))
 
-                    # Reset so same sign doesn't get accepted again immediately
-                    consecutive_count = 0
-
-                # --- Step 4: Emotion detection (every Nth frame) ---
-                if frame_number % EMOTION_EVERY_N_FRAMES == 0:
-                    emo, emo_conf = await loop.run_in_executor(
-                        _executor, detect_emotion_from_frame, frame_b64
-                    )
-                    if emo != "neutral" or emo_conf > 0.4:
-                        current_emotion = emo
-                        await set_emotion(user_id, emo)
-                        await websocket.send_json({
-                            "type": "emotion",
-                            "emotion": emo,
-                            "confidence": emo_conf,
-                        })
-
-                # --- Step 5: Collection timeout (max 10s) ---
-                if collection_start and (time.monotonic() - collection_start) >= COLLECTION_TIMEOUT:
+                # Step 4: Collection timeout (max 10s)
+                if collection_start and (now - collection_start) >= COLLECTION_TIMEOUT:
                     if await should_build_sentence(user_id, threshold=MIN_SIGNS_FOR_SENTENCE):
                         await _build_and_speak(
                             user_id, websocket, db_session_id, current_emotion
                         )
                     collection_start = None
-                    last_sign = ""
-                    consecutive_count = 0
 
             elif msg_type == "clear_buffer":
                 await clear_buffer(user_id)
                 collection_start = None
-                last_sign = ""
-                consecutive_count = 0
                 await websocket.send_json({"type": "letter", "letter": "", "buffer": ""})
 
             elif msg_type == "set_language":
@@ -267,7 +258,7 @@ async def sign_websocket(websocket: WebSocket):
 
 
 async def _build_and_speak(user_id, websocket, db_session_id, emotion_override=None):
-    """Collect signs from buffer → Gemini LLM for sentence → ElevenLabs TTS."""
+    """Collect signs from buffer → Bedrock LLM for sentence → ElevenLabs TTS."""
     raw_text, session_emotion = await get_and_clear_buffer(user_id)
     if not raw_text:
         return
@@ -286,7 +277,7 @@ async def _build_and_speak(user_id, websocket, db_session_id, emotion_override=N
         })
         return
 
-    # Send collected signs to Gemini LLM for natural sentence generation
+    # Send collected signs to Bedrock LLM for natural sentence generation
     try:
         result = await vision_manager.build_sentence(raw_text, emotion)
         sentence = result.text

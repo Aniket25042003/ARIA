@@ -25,12 +25,14 @@ class VisionManager:
 
     def initialize(self) -> None:
         """Initialize providers based on config. Called during app startup."""
+        from app.services.vision.bedrock_provider import BedrockProvider
         from app.services.vision.claude_provider import ClaudeProvider
         from app.services.vision.gemini_provider import GeminiProvider
         from app.services.vision.local_provider import LocalProvider
         from app.services.vision.openai_provider import OpenAIProvider
 
         provider_map = {
+            "bedrock": (BedrockProvider, settings.aws_access_key_id),
             "gemini": (GeminiProvider, settings.gemini_api_key),
             "openai": (OpenAIProvider, settings.openai_api_key),
             "claude": (ClaudeProvider, settings.anthropic_api_key),

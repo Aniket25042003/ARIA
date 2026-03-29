@@ -20,6 +20,7 @@ torch>=2.0
 torchvision>=0.15
 huggingface-hub>=0.20
 mtcnn>=1.0
+boto3>=1.34
 requests>=2.32
 python-dotenv>=1.0
 structlog>=24.4
