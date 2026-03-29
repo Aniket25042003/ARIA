@@ -20,6 +20,7 @@ class VisionManager:
     def __init__(self):
         self._providers: list[VisionProvider] = []
         self._health_cache: dict[str, bool] = {}
+        self._fail_counts: dict[str, int] = {}
         self._initialized = False
 
     def initialize(self) -> None:
@@ -79,6 +80,7 @@ class VisionManager:
             try:
                 result = await getattr(provider, method)(*args)
                 latency = (time.monotonic() - start) * 1000
+                self._fail_counts[provider.name] = 0
                 await self._log_usage(provider.name, method, int(latency), True)
                 return result
             except NotImplementedError:
@@ -87,13 +89,17 @@ class VisionManager:
             except Exception as e:
                 latency = (time.monotonic() - start) * 1000
                 await self._log_usage(provider.name, method, int(latency), False, str(e))
-                self._health_cache[provider.name] = False
+                # Only mark unhealthy after 3 consecutive failures
+                self._fail_counts[provider.name] = self._fail_counts.get(provider.name, 0) + 1
+                if self._fail_counts[provider.name] >= 3:
+                    self._health_cache[provider.name] = False
                 last_error = e
                 logger.warning(
                     "vision_provider_failed",
                     provider=provider.name,
                     method=method,
                     error=str(e),
+                    fail_count=self._fail_counts[provider.name],
                 )
                 continue
 

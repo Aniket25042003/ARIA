@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import time
 
@@ -50,10 +51,10 @@ class GeminiProvider(VisionProvider):
     async def detect_obstacle(self, image_b64: str) -> VisionResult:
         start = time.monotonic()
         image_data = base64.b64decode(image_b64)
-        response = self._image_model.generate_content([
-            OBSTACLE_PROMPT,
-            {"mime_type": "image/jpeg", "data": image_data},
-        ])
+        response = await asyncio.to_thread(
+            self._image_model.generate_content,
+            [OBSTACLE_PROMPT, {"mime_type": "image/jpeg", "data": image_data}],
+        )
         latency = (time.monotonic() - start) * 1000
         raw = response.text.strip()
 
@@ -65,7 +66,7 @@ class GeminiProvider(VisionProvider):
     async def build_sentence(self, partial_text: str, emotion: str) -> VisionResult:
         start = time.monotonic()
         prompt = SENTENCE_PROMPT_TEMPLATE.format(letters=partial_text, emotion=emotion)
-        response = self._text_model.generate_content(prompt)
+        response = await asyncio.to_thread(self._text_model.generate_content, prompt)
         latency = (time.monotonic() - start) * 1000
         return VisionResult(
             text=response.text.strip(), provider=self.name, latency_ms=latency
@@ -76,7 +77,7 @@ class GeminiProvider(VisionProvider):
             return VisionResult(text=text, provider=self.name, latency_ms=0)
         start = time.monotonic()
         prompt = TRANSLATE_PROMPT_TEMPLATE.format(language=target_lang, text=text)
-        response = self._text_model.generate_content(prompt)
+        response = await asyncio.to_thread(self._text_model.generate_content, prompt)
         latency = (time.monotonic() - start) * 1000
         return VisionResult(
             text=response.text.strip(), provider=self.name, latency_ms=latency
