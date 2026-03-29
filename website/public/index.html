@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ARIA — Adaptive Real-time Intelligence Assistant</title>
+  <meta name="description" content="ARIA is a universal accessibility app that helps deaf/mute and blind users communicate and navigate the world using AI-powered sign language recognition, emotion-matched speech, and real-time obstacle detection." />
+  <meta name="theme-color" content="#6C5CE7" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>A</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ─── NAVBAR ─── -->
+  <nav class="navbar" id="navbar">
+    <div class="nav-container">
+      <a href="#" class="nav-logo">
+        <div class="nav-logo-icon">A</div>
+        <span>ARIA</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#how-it-works">How It Works</a>
+        <a href="#technology">Technology</a>
+        <a href="#download" class="nav-cta">Get the App</a>
+      </div>
+      <button class="nav-toggle" id="navToggle" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ─── HERO ─── -->
+  <section class="hero" id="hero">
+    <div class="hero-bg">
+      <div class="hero-orb hero-orb-1"></div>
+      <div class="hero-orb hero-orb-2"></div>
+      <div class="hero-orb hero-orb-3"></div>
+    </div>
+    <div class="hero-content">
+      <div class="hero-badge animate-on-scroll">
+        <span class="hero-badge-dot"></span>
+        AI-Powered Accessibility
+      </div>
+      <h1 class="hero-title animate-on-scroll">
+        Breaking barriers<br />with <span class="gradient-text">ARIA</span>
+      </h1>
+      <p class="hero-subtitle animate-on-scroll">
+        A universal accessibility assistant that gives voice to the deaf and
+        eyes to the blind — powered by real-time AI on the edge.
+      </p>
+      <div class="hero-actions animate-on-scroll">
+        <a href="#download" class="btn btn-primary btn-lg">
+          <span>Get Early Access</span>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </a>
+        <a href="#features" class="btn btn-ghost btn-lg">Learn More</a>
+      </div>
+      <div class="hero-stats animate-on-scroll">
+        <div class="hero-stat">
+          <span class="hero-stat-value" data-count="2">0</span>
+          <span class="hero-stat-label">Accessibility Modes</span>
+        </div>
+        <div class="hero-stat-divider"></div>
+        <div class="hero-stat">
+          <span class="hero-stat-value" data-count="5">0</span>
+          <span class="hero-stat-label">AI Vision Providers</span>
+        </div>
+        <div class="hero-stat-divider"></div>
+        <div class="hero-stat">
+          <span class="hero-stat-value" data-count="4">0</span>
+          <span class="hero-stat-label">Languages Supported</span>
+        </div>
+      </div>
+    </div>
+    <div class="hero-scroll-indicator">
+      <div class="scroll-arrow"></div>
+    </div>
+  </section>
+
+  <!-- ─── FEATURES ─── -->
+  <section class="features" id="features">
+    <div class="container">
+      <div class="section-header animate-on-scroll">
+        <span class="section-tag">Features</span>
+        <h2 class="section-title">Two modes. One mission.</h2>
+        <p class="section-subtitle">
+          ARIA adapts to your needs with two powerful accessibility modes,
+          each designed for a specific community.
+        </p>
+      </div>
+
+      <div class="feature-cards">
+        <!-- SIGN Mode -->
+        <div class="feature-card feature-card-sign animate-on-scroll">
+          <div class="feature-card-glow"></div>
+          <div class="feature-card-inner">
+            <div class="feature-icon-wrap feature-icon-sign">
+              <span class="feature-icon">S</span>
+            </div>
+            <div class="feature-badge">For Deaf & Mute</div>
+            <h3 class="feature-title">SIGN Mode</h3>
+            <p class="feature-desc">
+              Sign in American Sign Language using your phone camera. ARIA
+              recognizes your hand signs, detects your facial emotion, and
+              speaks your words aloud with matching tone and feeling.
+            </p>
+            <ul class="feature-list">
+              <li>
+                <span class="feature-check">&#10003;</span>
+                Real-time ASL recognition via AI vision
+              </li>
+              <li>
+                <span class="feature-check">&#10003;</span>
+                Facial emotion detection (8 emotions)
+              </li>
+              <li>
+                <span class="feature-check">&#10003;</span>
+                Emotion-matched text-to-speech output
+              </li>
+              <li>
+                <span class="feature-check">&#10003;</span>
+                Multi-language translation (EN, ES, FR, HI)
+              </li>
+              <li>
+                <span class="feature-check">&#10003;</span>
+                Live transcript with history
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- GUIDE Mode -->
+        <div class="feature-card feature-card-guide animate-on-scroll">
+          <div class="feature-card-glow"></div>
+          <div class="feature-card-inner">
+            <div class="feature-icon-wrap feature-icon-guide">
+              <span class="feature-icon">G</span>
+            </div>
+            <div class="feature-badge feature-badge-guide">For Blind</div>
+            <h3 class="feature-title">GUIDE Mode</h3>
+            <p class="feature-desc">
+              Point your camera ahead and ARIA warns you about obstacles in
+              real-time with voice alerts and haptic feedback — keeping you
+              safe as you navigate the world.
+            </p>
+            <ul class="feature-list">
+              <li>
+                <span class="feature-check feature-check-guide">&#10003;</span>
+                On-device YOLOv8 obstacle detection
+              </li>
+              <li>
+                <span class="feature-check feature-check-guide">&#10003;</span>
+                3-level severity (clear / caution / danger)
+              </li>
+              <li>
+                <span class="feature-check feature-check-guide">&#10003;</span>
+                Instant voice warnings via TTS
+              </li>
+              <li>
+                <span class="feature-check feature-check-guide">&#10003;</span>
+                Haptic feedback (heavy for danger)
+              </li>
+              <li>
+                <span class="feature-check feature-check-guide">&#10003;</span>
+                Zero-latency local processing
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── HOW IT WORKS ─── -->
+  <section class="how-it-works" id="how-it-works">
+    <div class="container">
+      <div class="section-header animate-on-scroll">
+        <span class="section-tag">How It Works</span>
+        <h2 class="section-title">Simple. Powerful. Instant.</h2>
+        <p class="section-subtitle">
+          ARIA processes everything in real-time on a Jetson Orin Nano —
+          no cloud delay for safety-critical features.
+        </p>
+      </div>
+
+      <div class="steps">
+        <div class="step animate-on-scroll">
+          <div class="step-number">1</div>
+          <div class="step-content">
+            <h3 class="step-title">Open your camera</h3>
+            <p class="step-desc">
+              Choose SIGN mode (front camera for your hands) or GUIDE mode
+              (back camera for the path ahead). One tap to start.
+            </p>
+          </div>
+        </div>
+        <div class="step-connector animate-on-scroll"></div>
+        <div class="step animate-on-scroll">
+          <div class="step-number">2</div>
+          <div class="step-content">
+            <h3 class="step-title">AI processes in real-time</h3>
+            <p class="step-desc">
+              Frames stream to the Jetson backend at 5 FPS. AI vision providers
+              recognize signs or detect obstacles in milliseconds.
+            </p>
+          </div>
+        </div>
+        <div class="step-connector animate-on-scroll"></div>
+        <div class="step animate-on-scroll">
+          <div class="step-number">3</div>
+          <div class="step-content">
+            <h3 class="step-title">Hear the result</h3>
+            <p class="step-desc">
+              SIGN mode speaks your translated sentence with emotion-matched voice.
+              GUIDE mode alerts you with voice warnings and haptic vibration.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── TECHNOLOGY ─── -->
+  <section class="technology" id="technology">
+    <div class="container">
+      <div class="section-header animate-on-scroll">
+        <span class="section-tag">Technology</span>
+        <h2 class="section-title">Built for the edge</h2>
+        <p class="section-subtitle">
+          Powered by cutting-edge AI models with intelligent fallback —
+          running on NVIDIA Jetson for maximum speed and privacy.
+        </p>
+      </div>
+
+      <div class="tech-grid">
+        <div class="tech-card animate-on-scroll">
+          <div class="tech-card-icon" style="background: linear-gradient(135deg, #6C5CE7, #a29bfe);">
+            <span>AI</span>
+          </div>
+          <h3>Multi-Provider Vision</h3>
+          <p>Automatic fallback across Gemini, OpenAI, Claude, and local YOLOv8 for maximum reliability.</p>
+        </div>
+        <div class="tech-card animate-on-scroll">
+          <div class="tech-card-icon" style="background: linear-gradient(135deg, #00B894, #55efc4);">
+            <span>RT</span>
+          </div>
+          <h3>Real-time Processing</h3>
+          <p>WebSocket streaming at 5 FPS with on-device YOLO inference for zero-latency obstacle detection.</p>
+        </div>
+        <div class="tech-card animate-on-scroll">
+          <div class="tech-card-icon" style="background: linear-gradient(135deg, #e17055, #fdcb6e);">
+            <span>EM</span>
+          </div>
+          <h3>Emotion Intelligence</h3>
+          <p>FER + MTCNN detects 8 facial emotions. ElevenLabs speaks with matching tone and feeling.</p>
+        </div>
+        <div class="tech-card animate-on-scroll">
+          <div class="tech-card-icon" style="background: linear-gradient(135deg, #0984e3, #74b9ff);">
+            <span>HW</span>
+          </div>
+          <h3>Edge Hardware</h3>
+          <p>Runs on NVIDIA Jetson Orin Nano Super with CUDA 12.6 for GPU-accelerated inference.</p>
+        </div>
+        <div class="tech-card animate-on-scroll">
+          <div class="tech-card-icon" style="background: linear-gradient(135deg, #6c5ce7, #fd79a8);">
+            <span>ML</span>
+          </div>
+          <h3>Dual ASL Pipeline</h3>
+          <p>Rule-based MediaPipe classifier + ResNet50 neural network for robust sign recognition.</p>
+        </div>
+        <div class="tech-card animate-on-scroll">
+          <div class="tech-card-icon" style="background: linear-gradient(135deg, #636e72, #b2bec3);">
+            <span>DB</span>
+          </div>
+          <h3>Smart Analytics</h3>
+          <p>Gemini-powered dashboard generates personalized insights from your usage patterns.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── SOS ─── -->
+  <section class="sos-section">
+    <div class="container">
+      <div class="sos-card animate-on-scroll">
+        <div class="sos-content">
+          <div class="sos-icon">SOS</div>
+          <h2>Emergency SOS</h2>
+          <p>
+            In a critical moment, tap the SOS button. ARIA instantly
+            broadcasts an emergency message at full volume, records your GPS
+            coordinates, and logs the event — giving you a lifeline when you
+            need it most.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── DOWNLOAD / COMING SOON ─── -->
+  <section class="download" id="download">
+    <div class="container">
+      <div class="download-card animate-on-scroll">
+        <div class="download-bg">
+          <div class="download-orb download-orb-1"></div>
+          <div class="download-orb download-orb-2"></div>
+        </div>
+        <div class="download-content">
+          <span class="section-tag section-tag-light">Coming Soon</span>
+          <h2 class="download-title">Get ARIA on your phone</h2>
+          <p class="download-subtitle">
+            We're preparing ARIA for the App Store and Google Play.
+            Join the waitlist to be notified when it launches.
+          </p>
+          <div class="download-stores">
+            <div class="store-btn store-btn-disabled">
+              <div class="store-btn-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+              </div>
+              <div>
+                <div class="store-btn-small">Coming soon on</div>
+                <div class="store-btn-label">App Store</div>
+              </div>
+            </div>
+            <div class="store-btn store-btn-disabled">
+              <div class="store-btn-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M3.18 23.86L14.15 12.84 3.18.18c-.42.38-.68.95-.68 1.6v20.48c0 .65.26 1.22.68 1.6zm15.24-8.38l-3.67-2.12L3.18 23.86l12.5-7.23 2.74-1.15zm0-6.96L15.68 7.37l2.74-1.15L3.18.18l11.57 10.5 3.67-2.16zm3.4 2.04L18.42 8.4l-3.67 2.12L18.42 12.64l3.4-2.08z"/></svg>
+              </div>
+              <div>
+                <div class="store-btn-small">Coming soon on</div>
+                <div class="store-btn-label">Google Play</div>
+              </div>
+            </div>
+          </div>
+          <div class="download-email">
+            <form class="email-form" onsubmit="handleWaitlist(event)">
+              <input type="email" placeholder="Enter your email for updates" class="email-input" required />
+              <button type="submit" class="btn btn-primary">Notify Me</button>
+            </form>
+            <p class="email-hint" id="emailHint">We'll only email you when ARIA launches. No spam.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── FOOTER ─── -->
+  <footer class="footer">
+    <div class="container">
+      <div class="footer-content">
+        <div class="footer-brand">
+          <div class="footer-logo">
+            <div class="nav-logo-icon">A</div>
+            <span>ARIA</span>
+          </div>
+          <p class="footer-tagline">
+            Adaptive Real-time Intelligence Assistant.<br />
+            Breaking communication barriers with AI.
+          </p>
+        </div>
+        <div class="footer-links">
+          <div class="footer-col">
+            <h4>Product</h4>
+            <a href="#features">Features</a>
+            <a href="#how-it-works">How It Works</a>
+            <a href="#technology">Technology</a>
+          </div>
+          <div class="footer-col">
+            <h4>Resources</h4>
+            <a href="https://github.com/DhruvalAnandkar/ARIA1" target="_blank" rel="noopener">GitHub</a>
+            <a href="https://github.com/DhruvalAnandkar/ARIA1/blob/main/docs/QUICKSTART.md" target="_blank" rel="noopener">Documentation</a>
+          </div>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2026 ARIA. Built with purpose.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

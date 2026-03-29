@@ -374,6 +374,7 @@ Generate a JSON response with EXACTLY this structure (no markdown, no code fence
 
 # Models to try in order of preference (different SDK versions support different names)
 GEMINI_MODEL_CANDIDATES = [
+    "gemini-3-flash-preview",
     "gemini-2.0-flash",
     "gemini-1.5-flash",
     "gemini-1.5-flash-latest",
