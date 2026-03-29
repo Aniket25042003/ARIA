@@ -36,21 +36,6 @@ export interface ObstacleResponse {
   audio_url: string;
 }
 
-export interface NavStep {
-  instruction: string;
-  distance: string;
-  duration: string;
-  lat?: number;
-  lng?: number;
-}
-
-export interface NavigationResponse {
-  route_id: string;
-  steps: NavStep[];
-  total_distance: string;
-  total_duration: string;
-}
-
 export interface SpeakResponse {
   sentence: string;
   audio_url: string;

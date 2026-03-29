@@ -11,14 +11,12 @@ interface ConnectionState {
   backendConnected: boolean;
   backendChecked: boolean;
   signWsConnected: boolean;
-  guideWsConnected: boolean;
 
   setBackendUrl: (url: string) => Promise<void>;
   resetBackendUrl: () => Promise<void>;
   loadBackendUrl: () => Promise<void>;
   setBackendConnected: (connected: boolean) => void;
   setSignWsConnected: (connected: boolean) => void;
-  setGuideWsConnected: (connected: boolean) => void;
 }
 
 export const useConnectionStore = create<ConnectionState>((set) => ({
@@ -26,7 +24,6 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   backendConnected: false,
   backendChecked: false,
   signWsConnected: false,
-  guideWsConnected: false,
 
   setBackendUrl: async (url: string) => {
     // Normalize: remove trailing slash
@@ -59,5 +56,4 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   setBackendConnected: (connected) =>
     set({ backendConnected: connected, backendChecked: true }),
   setSignWsConnected: (connected) => set({ signWsConnected: connected }),
-  setGuideWsConnected: (connected) => set({ guideWsConnected: connected }),
 }));

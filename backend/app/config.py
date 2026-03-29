@@ -10,7 +10,6 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     elevenlabs_api_key: str = ""
-    google_maps_api_key: str = ""
 
     # Auth
     jwt_secret: str = "change-me-in-production"
