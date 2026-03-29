@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
+    aws_session_token: str = ""
     bedrock_model_id: str = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
 
     # Vision

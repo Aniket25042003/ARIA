@@ -47,12 +47,14 @@ class BedrockProvider(VisionProvider):
     name = "bedrock"
 
     def __init__(self):
-        self._client = boto3.client(
-            "bedrock-runtime",
-            region_name=settings.aws_region,
-            aws_access_key_id=settings.aws_access_key_id,
-            aws_secret_access_key=settings.aws_secret_access_key,
-        )
+        kwargs = {
+            "region_name": settings.aws_region,
+            "aws_access_key_id": settings.aws_access_key_id,
+            "aws_secret_access_key": settings.aws_secret_access_key,
+        }
+        if settings.aws_session_token:
+            kwargs["aws_session_token"] = settings.aws_session_token
+        self._client = boto3.client("bedrock-runtime", **kwargs)
         self._model_id = settings.bedrock_model_id
         logger.info("bedrock_provider_init", model=self._model_id, region=settings.aws_region)
 
